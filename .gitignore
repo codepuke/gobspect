@@ -1,0 +1,52 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+gq
+
+# Ignore everything in dist/
+/dist/*
+
+# But do not ignore the .gitkeep file
+!/dist/.gitkeep
+
+# Local environment
+.env
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.html
+*.cov
+*.prof
+
+# Dependency directories not using vendor
+vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Local AI assistant settings
+.claude/settings.local.json
+.mcp.json
+
+# AI Agent Context Symlinks
+GEMINI.md
+.cursorrules
+.clinerules
+.github/copilot-instructions.md
+.agents/rules/claude.md
+.opendev/skills/project_context/SKILL.md

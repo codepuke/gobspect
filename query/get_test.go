@@ -1,0 +1,778 @@
+package query
+
+import (
+	"testing"
+
+	"github.com/codepuke/gobspect"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// — test fixtures ——————————————————————————————————————————————————————————
+
+func makeString(s string) gobspect.Value { return gobspect.StringValue{V: s} }
+func makeInt(i int64) gobspect.Value     { return gobspect.IntValue{V: i} }
+func makeBool(b bool) gobspect.Value     { return gobspect.BoolValue{V: b} }
+
+func makeStruct(name string, fields ...gobspect.Field) gobspect.StructValue {
+	return gobspect.StructValue{TypeName: name, Fields: fields}
+}
+
+func field_(name string, v gobspect.Value) gobspect.Field {
+	return gobspect.Field{Name: name, Value: v}
+}
+
+func makeSlice(elems ...gobspect.Value) gobspect.SliceValue {
+	return gobspect.SliceValue{Elems: elems}
+}
+
+func makeArray(elems ...gobspect.Value) gobspect.ArrayValue {
+	return gobspect.ArrayValue{Len: len(elems), Elems: elems}
+}
+
+func makeMap(entries ...gobspect.MapEntry) gobspect.MapValue {
+	return gobspect.MapValue{Entries: entries}
+}
+
+func entry(k, v gobspect.Value) gobspect.MapEntry {
+	return gobspect.MapEntry{Key: k, Value: v}
+}
+
+func wrapped(typeName string, v gobspect.Value) gobspect.InterfaceValue {
+	return gobspect.InterfaceValue{TypeName: typeName, Value: v}
+}
+
+// — TestGetPath ——————————————————————————————————————————————————————————————
+
+// TestGetPathEmptyPath verifies that the empty path is the identity.
+func TestGetPathEmptyPath(t *testing.T) {
+	root := makeString("hello")
+	p, err := Parse("")
+	require.NoError(t, err)
+	v, ok := GetPath(root, p)
+	require.True(t, ok)
+	assert.Equal(t, root, v)
+}
+
+// TestGetPathStructField covers StructValue field navigation.
+func TestGetPathStructField(t *testing.T) {
+	root := makeStruct("Person",
+		field_("Name", makeString("Alice")),
+		field_("Age", makeInt(30)),
+	)
+
+	tests := []struct {
+		name      string
+		expr      string
+		wantValue gobspect.Value
+		wantOK    bool
+	}{
+		{
+			name:      "top-level field present",
+			expr:      "Name",
+			wantValue: makeString("Alice"),
+			wantOK:    true,
+		},
+		{
+			name:      "second field",
+			expr:      "Age",
+			wantValue: makeInt(30),
+			wantOK:    true,
+		},
+		{
+			name:   "absent field",
+			expr:   "Missing",
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := Parse(tt.expr)
+			require.NoError(t, err)
+			v, ok := GetPath(root, p)
+			assert.Equal(t, tt.wantOK, ok)
+			if tt.wantOK {
+				assert.Equal(t, tt.wantValue, v)
+			}
+		})
+	}
+}
+
+// TestGetPathNestedStruct covers deeply nested struct field navigation.
+func TestGetPathNestedStruct(t *testing.T) {
+	customer := makeStruct("Customer",
+		field_("Name", makeString("Bob")),
+	)
+	order := makeStruct("Order",
+		field_("Customer", customer),
+		field_("Total", makeInt(100)),
+	)
+	root := makeStruct("Root",
+		field_("Order", order),
+	)
+
+	v, ok := GetPath(root, mustParse("Order.Customer.Name"))
+	require.True(t, ok)
+	assert.Equal(t, makeString("Bob"), v)
+
+	_, ok = GetPath(root, mustParse("Order.Customer.Missing"))
+	assert.False(t, ok)
+}
+
+// TestGetPathSliceIndex covers positive integer index navigation.
+func TestGetPathSliceIndex(t *testing.T) {
+	slice := makeSlice(makeString("a"), makeString("b"), makeString("c"))
+	root := makeStruct("Root", field_("Items", slice))
+
+	tests := []struct {
+		name      string
+		expr      string
+		wantValue gobspect.Value
+		wantOK    bool
+	}{
+		{"index 0", "Items.0", makeString("a"), true},
+		{"index 1", "Items.1", makeString("b"), true},
+		{"index 2", "Items.2", makeString("c"), true},
+		{"out of bounds high", "Items.3", nil, false},
+		{"out of bounds very high", "Items.99", nil, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v, ok := Get(root, tt.expr)
+			assert.Equal(t, tt.wantOK, ok)
+			if tt.wantOK {
+				assert.Equal(t, tt.wantValue, v)
+			}
+		})
+	}
+}
+
+// TestGetPathNegativeIndex covers negative integer index navigation.
+func TestGetPathNegativeIndex(t *testing.T) {
+	slice := makeSlice(makeString("a"), makeString("b"), makeString("c"))
+	root := makeStruct("Root", field_("Items", slice))
+
+	tests := []struct {
+		name      string
+		expr      string
+		wantValue gobspect.Value
+		wantOK    bool
+	}{
+		{"index -1 (last)", "Items.-1", makeString("c"), true},
+		{"index -2 (second-to-last)", "Items.-2", makeString("b"), true},
+		{"index -3 (first)", "Items.-3", makeString("a"), true},
+		{"index -4 (out of bounds)", "Items.-4", nil, false},
+		{"large negative", "Items.-100", nil, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v, ok := Get(root, tt.expr)
+			assert.Equal(t, tt.wantOK, ok)
+			if tt.wantOK {
+				assert.Equal(t, tt.wantValue, v)
+			}
+		})
+	}
+}
+
+// TestGetPathArrayIndex covers ArrayValue index navigation.
+func TestGetPathArrayIndex(t *testing.T) {
+	arr := makeArray(makeInt(10), makeInt(20), makeInt(30))
+	root := makeStruct("Root", field_("Arr", arr))
+
+	v, ok := Get(root, "Arr.0")
+	require.True(t, ok)
+	assert.Equal(t, makeInt(10), v)
+
+	v, ok = Get(root, "Arr.-1")
+	require.True(t, ok)
+	assert.Equal(t, makeInt(30), v)
+
+	_, ok = Get(root, "Arr.5")
+	assert.False(t, ok)
+}
+
+// TestGetPathMapStringKey covers MapValue string-key navigation.
+func TestGetPathMapStringKey(t *testing.T) {
+	m := makeMap(
+		entry(makeString("foo"), makeInt(1)),
+		entry(makeString("bar"), makeInt(2)),
+	)
+	root := makeStruct("Root", field_("Meta", m))
+
+	tests := []struct {
+		name      string
+		expr      string
+		wantValue gobspect.Value
+		wantOK    bool
+	}{
+		{"existing key foo", "Meta.foo", makeInt(1), true},
+		{"existing key bar", "Meta.bar", makeInt(2), true},
+		{"missing key", "Meta.baz", nil, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v, ok := Get(root, tt.expr)
+			assert.Equal(t, tt.wantOK, ok)
+			if tt.wantOK {
+				assert.Equal(t, tt.wantValue, v)
+			}
+		})
+	}
+}
+
+// TestGetPathMapNonStringKey verifies that map entries with non-string keys
+// are silently skipped during string-based navigation.
+func TestGetPathMapNonStringKey(t *testing.T) {
+	m := makeMap(
+		entry(makeInt(1), makeString("one")), // non-string key
+		entry(makeString("two"), makeString("2")),
+	)
+	// Navigating by "1" should not find the int key.
+	v, ok := Get(m, "1")
+	// "1" would be treated as an index on a non-slice; not a string map lookup.
+	// The map has no StringValue key "1", so not found.
+	assert.False(t, ok)
+	_ = v
+
+	// "two" navigates the string key successfully.
+	v, ok = Get(m, "two")
+	// Get on a MapValue directly uses stepField if it's a segField.
+	// But "two" parses as a field name, and the map has key StringValue "two".
+	require.True(t, ok)
+	assert.Equal(t, makeString("2"), v)
+}
+
+// TestGetPathInterfaceValueTransparency verifies that InterfaceValue is
+// silently unwrapped before each segment is matched.
+func TestGetPathInterfaceValueTransparency(t *testing.T) {
+	inner := makeStruct("Inner", field_("Value", makeString("found")))
+	root := makeStruct("Root",
+		field_("Child", wrapped("Inner", inner)),
+	)
+
+	// Child is wrapped in InterfaceValue; GetPath should unwrap it.
+	v, ok := Get(root, "Child.Value")
+	require.True(t, ok)
+	assert.Equal(t, makeString("found"), v)
+}
+
+// TestGetPathInterfaceValueAtRoot verifies unwrapping when root itself is
+// wrapped in an InterfaceValue.
+func TestGetPathInterfaceValueAtRoot(t *testing.T) {
+	inner := makeStruct("Inner", field_("X", makeInt(42)))
+	root := wrapped("Inner", inner)
+
+	v, ok := Get(root, "X")
+	require.True(t, ok)
+	assert.Equal(t, makeInt(42), v)
+}
+
+// TestGetPathInterfaceValueChain verifies multiple layers of interface wrapping
+// are each unwrapped at the appropriate segment boundary.
+func TestGetPathInterfaceValueChain(t *testing.T) {
+	// Slice of interface-wrapped structs.
+	elem := wrapped("Item", makeStruct("Item", field_("Name", makeString("hello"))))
+	slice := makeSlice(elem)
+	root := makeStruct("Root", field_("Items", slice))
+
+	v, ok := Get(root, "Items.0.Name")
+	require.True(t, ok)
+	assert.Equal(t, makeString("hello"), v)
+}
+
+// TestGetPathScalarNode verifies that navigating into a scalar returns (nil, false).
+func TestGetPathScalarNode(t *testing.T) {
+	root := makeStruct("Root", field_("Num", makeInt(5)))
+
+	// Trying to navigate further into an IntValue.
+	_, ok := Get(root, "Num.Something")
+	assert.False(t, ok)
+
+	_, ok = Get(root, "Num.0")
+	assert.False(t, ok)
+}
+
+// TestGetPathOpaqueNode verifies that OpaqueValue nodes stop navigation.
+func TestGetPathOpaqueNode(t *testing.T) {
+	opaque := gobspect.OpaqueValue{TypeName: "time.Time", Encoding: "binary", Raw: []byte{1, 2, 3}}
+	root := makeStruct("Root", field_("CreatedAt", opaque))
+
+	_, ok := Get(root, "CreatedAt.anything")
+	assert.False(t, ok)
+}
+
+// TestGetPathNilValue verifies NilValue stops navigation.
+func TestGetPathNilValue(t *testing.T) {
+	root := makeStruct("Root", field_("Ptr", gobspect.NilValue{}))
+
+	_, ok := Get(root, "Ptr.Field")
+	assert.False(t, ok)
+}
+
+// TestGetPathEmptySlice covers out-of-bounds on an empty slice.
+func TestGetPathEmptySlice(t *testing.T) {
+	slice := makeSlice() // zero elements
+	root := makeStruct("Root", field_("Items", slice))
+
+	_, ok := Get(root, "Items.0")
+	assert.False(t, ok)
+
+	_, ok = Get(root, "Items.-1")
+	assert.False(t, ok)
+}
+
+// TestGetPathComplexNested covers the PRD example: Orders.0.Customer.Name
+func TestGetPathComplexNested(t *testing.T) {
+	customer := makeStruct("Customer",
+		field_("Name", makeString("Alice")),
+	)
+	order0 := makeStruct("Order",
+		field_("Customer", customer),
+		field_("Total", makeInt(50)),
+	)
+	order1 := makeStruct("Order",
+		field_("Customer", makeStruct("Customer", field_("Name", makeString("Bob")))),
+		field_("Total", makeInt(75)),
+	)
+	orders := makeSlice(order0, order1)
+	root := makeStruct("Root", field_("Orders", orders))
+
+	v, ok := Get(root, "Orders.0.Customer.Name")
+	require.True(t, ok)
+	assert.Equal(t, makeString("Alice"), v)
+
+	v, ok = Get(root, "Orders.1.Customer.Name")
+	require.True(t, ok)
+	assert.Equal(t, makeString("Bob"), v)
+
+	v, ok = Get(root, "Orders.-1.Customer.Name")
+	require.True(t, ok)
+	assert.Equal(t, makeString("Bob"), v)
+
+	v, ok = Get(root, "Orders.-2.Customer.Name")
+	require.True(t, ok)
+	assert.Equal(t, makeString("Alice"), v)
+}
+
+// — TestGet (convenience wrapper) —————————————————————————————————————————
+
+// TestGetPanicsOnInvalidSyntax verifies that Get panics for invalid expressions.
+func TestGetPanicsOnInvalidSyntax(t *testing.T) {
+	root := makeString("x")
+	assert.Panics(t, func() {
+		Get(root, ".bad")
+	})
+	assert.Panics(t, func() {
+		Get(root, "Orders.")
+	})
+}
+
+// TestGetReturnsFalseOnMissingPath verifies that Get returns (nil, false) for
+// valid syntax that does not resolve, without panicking.
+func TestGetReturnsFalseOnMissingPath(t *testing.T) {
+	root := makeStruct("Root", field_("Name", makeString("hi")))
+	assert.NotPanics(t, func() {
+		v, ok := Get(root, "Missing")
+		assert.False(t, ok)
+		assert.Nil(t, v)
+	})
+}
+
+// — TestMustGet ——————————————————————————————————————————————————————————————
+
+// TestMustGetSuccess verifies the happy path.
+func TestMustGetSuccess(t *testing.T) {
+	root := makeStruct("Root", field_("Name", makeString("hello")))
+	v := MustGet(root, "Name")
+	assert.Equal(t, makeString("hello"), v)
+}
+
+// TestMustGetPanicsOnInvalidSyntax verifies panic on bad syntax.
+func TestMustGetPanicsOnInvalidSyntax(t *testing.T) {
+	root := makeString("x")
+	assert.Panics(t, func() {
+		MustGet(root, ".bad")
+	})
+}
+
+// TestMustGetPanicsOnUnresolvedPath verifies panic when path does not resolve.
+func TestMustGetPanicsOnUnresolvedPath(t *testing.T) {
+	root := makeStruct("Root", field_("Name", makeString("hello")))
+	assert.Panics(t, func() {
+		MustGet(root, "Missing")
+	})
+}
+
+// TestMustGetPanicMessageContainsExpr verifies the panic message includes the path.
+func TestMustGetPanicMessageContainsExpr(t *testing.T) {
+	root := makeStruct("Root")
+	expr := "Orders.0.Customer.Name"
+	defer func() {
+		r := recover()
+		require.NotNil(t, r)
+		msg, ok := r.(string)
+		require.True(t, ok)
+		assert.Contains(t, msg, expr)
+	}()
+	MustGet(root, expr)
+}
+
+// TestMustGetPanicMessageContainsFailingSegment verifies the panic message includes
+// the specific segment that failed to resolve, not just the full expression.
+func TestMustGetPanicMessageContainsFailingSegment(t *testing.T) {
+	tests := []struct {
+		name    string
+		root    gobspect.Value
+		expr    string
+		wantSeg string // expected failing segment text in the panic message
+	}{
+		{
+			name:    "field segment missing",
+			root:    makeStruct("Root"),
+			expr:    "Orders.0.Customer.Name",
+			wantSeg: "Orders",
+		},
+		{
+			name:    "index segment out of bounds",
+			root:    makeStruct("Root", field_("Orders", makeSlice())),
+			expr:    "Orders.0.Customer.Name",
+			wantSeg: "0",
+		},
+		{
+			name:    "negative index out of bounds",
+			root:    makeStruct("Root", field_("Items", makeSlice())),
+			expr:    "Items.-1",
+			wantSeg: "-1",
+		},
+		{
+			name:    "wildcard on empty slice",
+			root:    makeSlice(),
+			expr:    "*.Name",
+			wantSeg: "*",
+		},
+		{
+			name:    "existence filter no match",
+			root:    makeSlice(makeStruct("Item", field_("Price", makeInt(5)))),
+			expr:    "[Status!].Price",
+			wantSeg: "[Status!]",
+		},
+		{
+			name:    "glob filter no match",
+			root:    makeSlice(makeStruct("Item", field_("Status", makeString("inactive")))),
+			expr:    "[Status=active].Price",
+			wantSeg: "[Status=active]",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var msg string
+			func() {
+				defer func() {
+					r := recover()
+					require.NotNil(t, r)
+					var ok bool
+					msg, ok = r.(string)
+					require.True(t, ok)
+				}()
+				MustGet(tt.root, tt.expr)
+			}()
+			assert.Contains(t, msg, tt.expr, "panic message should contain the full expression")
+			assert.Contains(t, msg, tt.wantSeg, "panic message should contain the failing segment")
+		})
+	}
+}
+
+// — TestGetPath allValueTypes ————————————————————————————————————————————————
+
+// TestGetPathAllValueTypes exercises GetPath against every concrete Value type
+// to ensure none cause a panic.
+func TestGetPathAllValueTypes(t *testing.T) {
+	scalars := []struct {
+		name  string
+		value gobspect.Value
+	}{
+		{"IntValue", makeInt(1)},
+		{"UintValue", gobspect.UintValue{V: 1}},
+		{"FloatValue", gobspect.FloatValue{V: 1.0}},
+		{"ComplexValue", gobspect.ComplexValue{Real: 1, Imag: 2}},
+		{"BoolValue", makeBool(true)},
+		{"StringValue", makeString("x")},
+		{"BytesValue", gobspect.BytesValue{V: []byte{1}}},
+		{"NilValue", gobspect.NilValue{}},
+		{"OpaqueValue", gobspect.OpaqueValue{TypeName: "T"}},
+	}
+
+	for _, tt := range scalars {
+		t.Run(tt.name+" empty path returns self", func(t *testing.T) {
+			v, ok := Get(tt.value, "")
+			require.True(t, ok)
+			assert.Equal(t, tt.value, v)
+		})
+
+		t.Run(tt.name+" field segment returns false", func(t *testing.T) {
+			_, ok := Get(tt.value, "Field")
+			assert.False(t, ok)
+		})
+
+		t.Run(tt.name+" index segment returns false", func(t *testing.T) {
+			_, ok := Get(tt.value, "0")
+			assert.False(t, ok)
+		})
+	}
+}
+
+// — TestGetPathDirectOnCollections ——————————————————————————————————————————
+
+// TestGetPathDirectOnSlice verifies Get works when root is a SliceValue directly.
+func TestGetPathDirectOnSlice(t *testing.T) {
+	slice := makeSlice(makeString("x"), makeString("y"))
+	v, ok := Get(slice, "1")
+	require.True(t, ok)
+	assert.Equal(t, makeString("y"), v)
+}
+
+// TestGetPathDirectOnArray verifies Get works when root is an ArrayValue directly.
+func TestGetPathDirectOnArray(t *testing.T) {
+	arr := makeArray(makeInt(10), makeInt(20))
+	v, ok := Get(arr, "0")
+	require.True(t, ok)
+	assert.Equal(t, makeInt(10), v)
+}
+
+// TestGetPathDirectOnMap verifies Get works when root is a MapValue directly.
+func TestGetPathDirectOnMap(t *testing.T) {
+	m := makeMap(entry(makeString("key"), makeString("value")))
+	v, ok := Get(m, "key")
+	require.True(t, ok)
+	assert.Equal(t, makeString("value"), v)
+}
+
+// — TestGetPathWildcard ——————————————————————————————————————————————————————
+
+// TestGetPathWildcardReturnsFirst verifies Get with * returns the first element.
+func TestGetPathWildcardReturnsFirst(t *testing.T) {
+	slice := makeSlice(makeString("first"), makeString("second"), makeString("third"))
+	v, ok := Get(slice, "*")
+	require.True(t, ok)
+	assert.Equal(t, makeString("first"), v)
+}
+
+// TestGetPathWildcardOnEmptyCollectionReturnsFalse verifies Get with * on an
+// empty slice returns (nil, false) without panicking.
+func TestGetPathWildcardOnEmptyCollectionReturnsFalse(t *testing.T) {
+	_, ok := Get(makeSlice(), "*")
+	assert.False(t, ok)
+
+	_, ok = Get(makeArray(), "*")
+	assert.False(t, ok)
+
+	_, ok = Get(makeMap(), "*")
+	assert.False(t, ok)
+}
+
+// TestGetPathWildcardBeforeField verifies Get with *.Field navigates into the
+// first element's field.
+func TestGetPathWildcardBeforeField(t *testing.T) {
+	items := makeSlice(
+		makeStruct("Item", field_("Price", makeInt(10))),
+		makeStruct("Item", field_("Price", makeInt(20))),
+	)
+	v, ok := Get(items, "*.Price")
+	require.True(t, ok)
+	assert.Equal(t, makeInt(10), v, "Get should return the first element's field")
+}
+
+// TestGetPathWildcardOnMap verifies Get with * on a MapValue returns the first
+// entry value.
+func TestGetPathWildcardOnMap(t *testing.T) {
+	m := makeMap(
+		entry(makeString("a"), makeInt(1)),
+		entry(makeString("b"), makeInt(2)),
+	)
+	v, ok := Get(m, "*")
+	require.True(t, ok)
+	assert.Equal(t, makeInt(1), v)
+}
+
+// — TestGetPathDescent ————————————————————————————————————————————————————————
+
+// TestGetPathDescentAtRoot verifies ..Name matches a field directly on the root.
+func TestGetPathDescentAtRoot(t *testing.T) {
+	root := makeStruct("Root",
+		field_("Price", makeInt(42)),
+		field_("Name", makeString("thing")),
+	)
+	v, ok := Get(root, "..Price")
+	require.True(t, ok)
+	assert.Equal(t, makeInt(42), v)
+}
+
+// TestGetPathDescentDepth1 verifies ..Name finds a field one level deep.
+func TestGetPathDescentDepth1(t *testing.T) {
+	inner := makeStruct("Inner", field_("Price", makeInt(99)))
+	root := makeStruct("Root", field_("Orders", inner))
+
+	v, ok := Get(root, "..Price")
+	require.True(t, ok)
+	assert.Equal(t, makeInt(99), v)
+}
+
+// TestGetPathDescentDepth2 verifies ..Name finds a field two levels deep.
+func TestGetPathDescentDepth2(t *testing.T) {
+	deep := makeStruct("Deep", field_("Price", makeInt(7)))
+	mid := makeStruct("Mid", field_("Detail", deep))
+	root := makeStruct("Root", field_("Orders", mid))
+
+	v, ok := Get(root, "..Price")
+	require.True(t, ok)
+	assert.Equal(t, makeInt(7), v)
+}
+
+// TestGetPathDescentNotFound verifies ..Name returns (nil, false) when absent everywhere.
+func TestGetPathDescentNotFound(t *testing.T) {
+	root := makeStruct("Root",
+		field_("A", makeStruct("A", field_("B", makeInt(1)))),
+	)
+	_, ok := Get(root, "..Missing")
+	assert.False(t, ok)
+}
+
+// TestGetPathDescentThroughInterface verifies ..Name unwraps InterfaceValue nodes.
+func TestGetPathDescentThroughInterface(t *testing.T) {
+	inner := makeStruct("Inner", field_("Price", makeInt(55)))
+	root := makeStruct("Root",
+		field_("Item", wrapped("Inner", inner)),
+	)
+	v, ok := Get(root, "..Price")
+	require.True(t, ok)
+	assert.Equal(t, makeInt(55), v)
+}
+
+// TestGetPathDescentFollowedBySegments verifies ..Name.SubField chaining.
+func TestGetPathDescentFollowedBySegments(t *testing.T) {
+	customer := makeStruct("Customer", field_("Name", makeString("Alice")))
+	order := makeStruct("Order", field_("Customer", customer))
+	root := makeStruct("Root", field_("Orders", makeSlice(order)))
+
+	// Find the first Orders slice element, then navigate .0.Customer.Name
+	v, ok := Get(root, "..Orders.0.Customer.Name")
+	require.True(t, ok)
+	assert.Equal(t, makeString("Alice"), v)
+}
+
+// TestMustGetPanicMessageContainsDescentSeg verifies the panic message includes the
+// ..Name segment string when recursive descent fails.
+func TestMustGetPanicMessageContainsDescentSeg(t *testing.T) {
+	root := makeStruct("Root")
+	var msg string
+	func() {
+		defer func() {
+			r := recover()
+			require.NotNil(t, r)
+			var ok bool
+			msg, ok = r.(string)
+			require.True(t, ok)
+		}()
+		MustGet(root, "..Missing")
+	}()
+	assert.Contains(t, msg, "..Missing")
+}
+
+// TestMustGetPanicMessageContainsContainsFilter verifies that the panic message
+// for a failed [Field~pattern] filter segment includes the "~" operator string.
+// This exercises the filterOpContains case in segString.
+func TestMustGetPanicMessageContainsContainsFilter(t *testing.T) {
+	// A root with Items that have no Tags field — [Tags~go] will fail to match.
+	root := makeStruct("Root",
+		field_("Items", makeSlice(makeStruct("Item", field_("Name", makeString("x"))))),
+	)
+
+	var msg string
+	func() {
+		defer func() {
+			r := recover()
+			require.NotNil(t, r)
+			var ok bool
+			msg, ok = r.(string)
+			require.True(t, ok)
+		}()
+		MustGet(root, "Items[Tags~go]")
+	}()
+	assert.Contains(t, msg, "[Tags~go]")
+}
+
+// TestCollectFilteredNonCollection verifies that applying a filter directly to a
+// scalar (non-collection) value returns (nil, false) from collectFiltered.
+// This is exercised when All/Get is called with a filter segment on a scalar root.
+func TestCollectFilteredNonCollection(t *testing.T) {
+	// A StringValue is not a collection; [Field!] cannot iterate over it.
+	got := All(makeString("hello"), "[Field!]")
+	assert.Nil(t, got, "filter on a scalar should produce nil results")
+
+	got = All(makeInt(42), "[Status=active]")
+	assert.Nil(t, got, "filter on an int scalar should produce nil results")
+}
+
+// TestSegStringDefaultCase verifies that segString returns "?" for an unknown
+// segment kind. This exercises the default branch.
+func TestSegStringDefaultCase(t *testing.T) {
+	s := segment{kind: segKind(999)}
+	result := segString(s)
+	assert.Equal(t, "?", result)
+}
+
+// TestWalkGetPathNilInterfaceInner verifies walkGetPath returns (nil, false) when
+// it encounters a nil value mid-path (unwrapped InterfaceValue with nil inner).
+func TestWalkGetPathNilInterfaceInner(t *testing.T) {
+	// An InterfaceValue whose Value is nil — unwrapInterface returns nil, so the
+	// next segment check must detect cur==nil and return false.
+	nilWrapped := gobspect.InterfaceValue{TypeName: "T", Value: nil}
+	root := makeStruct("Root", field_("Child", nilWrapped))
+	_, ok := Get(root, "Child.Field")
+	assert.False(t, ok)
+}
+
+// TestWalkGetPathDefaultSegmentKind verifies the default case in walkGetPath
+// (unknown segment kind) returns (nil, false) without panicking.
+func TestWalkGetPathDefaultSegmentKind(t *testing.T) {
+	root := makeString("x")
+	// Build a Path with an unknown segment kind directly.
+	p := Path{segs: []segment{{kind: segKind(999)}}}
+	v, ok := GetPath(root, p)
+	assert.False(t, ok)
+	assert.Nil(t, v)
+}
+
+// TestSegStringOrAltFilter verifies that segString for an OR-group filter
+// delegates to Path.String() to produce the canonical form.
+func TestSegStringOrAltFilter(t *testing.T) {
+	// Build an OR-group segment directly.
+	orSeg := segment{
+		kind: segFilter,
+		orAlts: []segment{
+			{kind: segFilter, name: "A", filterOp: filterOpGlob, filterPattern: "x"},
+			{kind: segFilter, name: "B", filterOp: filterOpGlob, filterPattern: "y"},
+		},
+	}
+	result := segString(orSeg)
+	assert.Contains(t, result, "[A=x]")
+	assert.Contains(t, result, "[B=y]")
+	assert.Contains(t, result, "|")
+}
+
+// — helpers ——————————————————————————————————————————————————————————————————
+
+// mustParse is a test helper that calls Parse and panics on error.
+func mustParse(expr string) Path {
+	p, err := Parse(expr)
+	if err != nil {
+		panic(err)
+	}
+	return p
+}

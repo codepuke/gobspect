@@ -1,0 +1,465 @@
+package gobspect
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"math"
+	"math/bits"
+)
+
+// messageReader is a mutable io.ByteReader whose underlying source can be
+// switched mid-stream. decodeInterface uses this to span the boundary between
+// the current outer message and the next one when decoding interface values.
+type messageReader struct {
+	cur io.ByteReader
+}
+
+func (mr *messageReader) ReadByte() (byte, error) {
+	return mr.cur.ReadByte()
+}
+
+// valueDecoder decodes gob value messages into the Value AST.
+// It shares the registry with the streamDecoder so type definitions
+// registered during stream processing are visible here.
+type valueDecoder struct {
+	ins      *Inspector
+	sd       *streamDecoder
+	registry map[int]wireTypeDef
+	depth    int // current composite nesting depth, for MaxDepth enforcement
+}
+
+func newValueDecoder(ins *Inspector, sd *streamDecoder) *valueDecoder {
+	return &valueDecoder{ins: ins, sd: sd, registry: sd.registry}
+}
+
+// checkDepth increments vd.depth, checks it against MaxDepth, and returns a
+// cleanup function that decrements it. Call as: defer vd.checkDepth(label)().
+// Returns an error (non-nil) only when the limit is exceeded.
+func (vd *valueDecoder) enterDepth(label string) error {
+	vd.depth++
+	if vd.ins.options.MaxDepth > 0 && vd.depth > vd.ins.options.MaxDepth {
+		vd.depth--
+		return fmt.Errorf("gob: max depth %d exceeded at %s", vd.ins.options.MaxDepth, label)
+	}
+	return nil
+}
+
+// decodeTopLevelValue decodes a top-level gob value from the message body.
+//
+// For struct types the field-delta sequence begins immediately.
+// For all other types gob wraps the value in a synthetic single-field struct:
+// uint(0) is the singleton "delta" (field 0 from position 0), followed by
+// the encoded value. See encoding/gob encode.go, encodeSingle.
+func (vd *valueDecoder) decodeTopLevelValue(typeID int, r *messageReader) (Value, error) {
+	// Struct types start directly with field deltas — no singleton wrapper.
+	if def, ok := vd.registry[typeID]; ok && def.StructT != nil {
+		return vd.decodeStructValue(typeID, def.StructT, r)
+	}
+
+	// Non-struct: consume the singleton uint(0) prefix.
+	delta, err := decodeUint(r)
+	if err != nil {
+		return nil, fmt.Errorf("gob: reading singleton prefix: %w", err)
+	}
+	if delta != 0 {
+		return nil, fmt.Errorf("gob: expected singleton delta 0, got %d", delta)
+	}
+	return vd.decodeFieldValue(typeID, r)
+}
+
+// decodeFieldValue decodes a value of the given type from r.
+// This is used for struct fields, slice/map/array elements, and the
+// body of a singleton value (after the uint(0) prefix is stripped).
+// It does NOT handle the singleton uint(0) prefix itself.
+func (vd *valueDecoder) decodeFieldValue(typeID int, r *messageReader) (Value, error) {
+	switch typeID {
+	case 1:
+		return vd.decodeBool(r)
+	case 2:
+		return vd.decodeSignedInt(r)
+	case 3:
+		return vd.decodeUnsignedInt(r)
+	case 4:
+		return vd.decodeFloat(r)
+	case 5:
+		return vd.decodeBytes(r)
+	case 6:
+		return vd.decodeString(r)
+	case 7:
+		return vd.decodeComplex(r)
+	case 8:
+		return vd.decodeInterface(r)
+	}
+
+	def, ok := vd.registry[typeID]
+	if !ok {
+		return nil, fmt.Errorf("gob: unknown type ID %d", typeID)
+	}
+	switch {
+	case def.StructT != nil:
+		return vd.decodeStructValue(typeID, def.StructT, r)
+	case def.SliceT != nil:
+		return vd.decodeSliceValue(typeID, def.SliceT, r)
+	case def.MapT != nil:
+		return vd.decodeMapValue(typeID, def.MapT, r)
+	case def.ArrayT != nil:
+		return vd.decodeArrayValue(typeID, def.ArrayT, r)
+	case def.GobEncoderT != nil:
+		return vd.decodeOpaqueValue(def.GobEncoderT.Common.Name, "gob", r)
+	case def.BinaryMarshalerT != nil:
+		return vd.decodeOpaqueValue(def.BinaryMarshalerT.Common.Name, "binary", r)
+	case def.TextMarshalerT != nil:
+		return vd.decodeOpaqueValue(def.TextMarshalerT.Common.Name, "text", r)
+	default:
+		return nil, fmt.Errorf("gob: wireTypeDef for ID %d has no recognised variant", typeID)
+	}
+}
+
+// — Primitive type decoders ——————————————————————————————————————————————
+
+// decodeBool reads a gob bool field value (uint, 0=false, nonzero=true).
+func (vd *valueDecoder) decodeBool(r io.ByteReader) (Value, error) {
+	u, err := decodeUint(r)
+	return BoolValue{u != 0}, err
+}
+
+// decodeSignedInt reads a gob signed integer (zig-zag encoded).
+func (vd *valueDecoder) decodeSignedInt(r io.ByteReader) (Value, error) {
+	v, err := decodeInt(r)
+	return IntValue{v}, err
+}
+
+// decodeUnsignedInt reads a gob unsigned integer.
+func (vd *valueDecoder) decodeUnsignedInt(r io.ByteReader) (Value, error) {
+	v, err := decodeUint(r)
+	return UintValue{v}, err
+}
+
+// gobFloatBits decodes a gob-encoded float64.
+// Gob transmits floats as byte-reversed IEEE 754 uint64 so that the
+// exponent byte arrives first, giving better varint compression for
+// integer-valued floats.
+func gobFloatBits(r io.ByteReader) (float64, error) {
+	u, err := decodeUint(r)
+	if err != nil {
+		return 0, err
+	}
+	return math.Float64frombits(bits.ReverseBytes64(u)), nil
+}
+
+func (vd *valueDecoder) decodeFloat(r io.ByteReader) (Value, error) {
+	f, err := gobFloatBits(r)
+	return FloatValue{f}, err
+}
+
+// decodeComplex reads a gob complex value: real part then imaginary part,
+// each a byte-reversed IEEE 754 float64.
+func (vd *valueDecoder) decodeComplex(r io.ByteReader) (Value, error) {
+	re, err := gobFloatBits(r)
+	if err != nil {
+		return nil, err
+	}
+	im, err := gobFloatBits(r)
+	return ComplexValue{re, im}, err
+}
+
+// decodeString reads a gob-encoded string (uint length + bytes).
+func (vd *valueDecoder) decodeString(r io.ByteReader) (Value, error) {
+	s, err := decodeString(r)
+	return StringValue{s}, err
+}
+
+// decodeBytes reads a gob-encoded []byte (uint length + raw bytes).
+func (vd *valueDecoder) decodeBytes(r io.ByteReader) (Value, error) {
+	n, err := decodeUint(r)
+	if err != nil {
+		return nil, err
+	}
+	b, err := readBytes(r, n)
+	return BytesValue{b}, err
+}
+
+// — Composite type decoders ——————————————————————————————————————————————
+
+// decodeStructValue decodes a gob struct value.
+//
+// Struct fields are encoded sparsely: each present field is preceded by a
+// uint delta (gap from the previous 0-based field index, starting from -1).
+// Zero-valued fields are omitted. A delta of 0 terminates the sequence.
+func (vd *valueDecoder) decodeStructValue(typeID int, def *wireStructType, r *messageReader) (Value, error) {
+	if err := vd.enterDepth("struct " + def.Common.Name); err != nil {
+		return nil, err
+	}
+	defer func() { vd.depth-- }()
+	sv := StructValue{
+		TypeName: def.Common.Name,
+		TypeID:   typeID,
+	}
+	fieldIdx := -1 // mirrors encoder's state.fieldnum, starts at -1
+	for {
+		delta, err := decodeUint(r)
+		if err != nil {
+			return nil, fmt.Errorf("gob: reading field delta in %q: %w", def.Common.Name, err)
+		}
+		if delta == 0 {
+			break
+		}
+		// Guard against integer overflow: a delta larger than the total
+		// field count can never be valid, and converting it to int would
+		// wrap to a negative value and bypass the bounds check below.
+		if delta > uint64(len(def.Fields)) {
+			return nil, fmt.Errorf("gob: field delta %d out of range for struct %q (%d fields defined)", delta, def.Common.Name, len(def.Fields))
+		}
+		fieldIdx += int(delta)
+		if fieldIdx >= len(def.Fields) {
+			return nil, fmt.Errorf("gob: field index %d out of range for struct %q (%d fields defined)", fieldIdx, def.Common.Name, len(def.Fields))
+		}
+		fd := def.Fields[fieldIdx]
+		fv, err := vd.decodeFieldValue(fd.ID, r)
+		if err != nil {
+			return nil, fmt.Errorf("gob: decoding field %q of %q: %w", fd.Name, def.Common.Name, err)
+		}
+		sv.Fields = append(sv.Fields, Field{Name: fd.Name, Value: fv})
+	}
+	return sv, nil
+}
+
+// decodeSliceValue decodes a gob slice: uint(count) then each element.
+// Elements are encoded without field deltas — just their raw value encodings.
+func (vd *valueDecoder) decodeSliceValue(typeID int, def *wireSliceType, r *messageReader) (Value, error) {
+	if err := vd.enterDepth("slice " + def.Common.Name); err != nil {
+		return nil, err
+	}
+	defer func() { vd.depth-- }()
+	count, err := decodeUint(r)
+	if err != nil {
+		return nil, err
+	}
+	if count > 1<<30 {
+		return nil, fmt.Errorf("gob: slice element count %d exceeds limit", count)
+	}
+	sv := SliceValue{
+		TypeName: def.Common.Name,
+		TypeID:   typeID,
+		ElemType: vd.typeLabel(def.Elem),
+		Elems:    make([]Value, count),
+	}
+	for i := range sv.Elems {
+		sv.Elems[i], err = vd.decodeFieldValue(def.Elem, r)
+		if err != nil {
+			return nil, fmt.Errorf("gob: decoding slice element %d: %w", i, err)
+		}
+	}
+	return sv, nil
+}
+
+// decodeMapValue decodes a gob map: uint(count) then alternating key/value pairs.
+func (vd *valueDecoder) decodeMapValue(typeID int, def *wireMapType, r *messageReader) (Value, error) {
+	if err := vd.enterDepth("map " + def.Common.Name); err != nil {
+		return nil, err
+	}
+	defer func() { vd.depth-- }()
+	count, err := decodeUint(r)
+	if err != nil {
+		return nil, err
+	}
+	if count > 1<<30 {
+		return nil, fmt.Errorf("gob: map entry count %d exceeds limit", count)
+	}
+	mv := MapValue{
+		TypeName: def.Common.Name,
+		TypeID:   typeID,
+		KeyType:  vd.typeLabel(def.Key),
+		ElemType: vd.typeLabel(def.Elem),
+		Entries:  make([]MapEntry, count),
+	}
+	for i := range mv.Entries {
+		key, err := vd.decodeFieldValue(def.Key, r)
+		if err != nil {
+			return nil, fmt.Errorf("gob: decoding map key %d: %w", i, err)
+		}
+		val, err := vd.decodeFieldValue(def.Elem, r)
+		if err != nil {
+			return nil, fmt.Errorf("gob: decoding map value %d: %w", i, err)
+		}
+		mv.Entries[i] = MapEntry{Key: key, Value: val}
+	}
+	return mv, nil
+}
+
+// decodeArrayValue decodes a gob array: uint(count) then each element.
+// The count should equal def.Len but we decode whatever count is in the stream.
+func (vd *valueDecoder) decodeArrayValue(typeID int, def *wireArrayType, r *messageReader) (Value, error) {
+	if err := vd.enterDepth("array " + def.Common.Name); err != nil {
+		return nil, err
+	}
+	defer func() { vd.depth-- }()
+	count, err := decodeUint(r)
+	if err != nil {
+		return nil, err
+	}
+	if count > 1<<30 {
+		return nil, fmt.Errorf("gob: array element count %d exceeds limit", count)
+	}
+	av := ArrayValue{
+		TypeName: def.Common.Name,
+		TypeID:   typeID,
+		ElemType: vd.typeLabel(def.Elem),
+		Len:      def.Len,
+		Elems:    make([]Value, count),
+	}
+	for i := range av.Elems {
+		av.Elems[i], err = vd.decodeFieldValue(def.Elem, r)
+		if err != nil {
+			return nil, fmt.Errorf("gob: decoding array element %d: %w", i, err)
+		}
+	}
+	return av, nil
+}
+
+// decodeOpaqueValue reads an opaque blob (GobEncoder, BinaryMarshaler, or
+// TextMarshaler). The wire encoding is uint(length) + raw bytes.
+func (vd *valueDecoder) decodeOpaqueValue(typeName, encoding string, r io.ByteReader) (Value, error) {
+	n, err := decodeUint(r)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := readBytes(r, n)
+	if err != nil {
+		return nil, err
+	}
+	ov := OpaqueValue{
+		TypeName: typeName,
+		Encoding: encoding,
+		Raw:      raw,
+	}
+	if encoding == "text" {
+		// TextMarshaler blobs are always valid UTF-8 strings by contract.
+		ov.Decoded = string(raw)
+	} else if dec, ok := vd.ins.decoders[typeName]; ok {
+		if decoded, decErr := dec(raw); decErr == nil {
+			ov.Decoded = decoded
+		}
+	}
+	return ov, nil
+}
+
+// decodeInterface decodes a gob interface-typed field.
+//
+// Wire format for a non-nil interface:
+//
+//	uint(nameLen) name [(-typeId wireTypeDef)*] (+typeId) uint(valueLen) value
+//
+// The inline type definitions (negative IDs) occur within the current message
+// body. The positive concrete type ID and the value bytes may be in the next
+// outer stream message (a continuation message sent by the encoder).
+// The continuation message body format is: (+typeId) uint(valueLen) value [remaining outer struct bytes].
+//
+// After this function returns, r is positioned at whatever bytes follow the
+// value in the stream (e.g. the struct terminator for the enclosing struct).
+func (vd *valueDecoder) decodeInterface(r *messageReader) (Value, error) {
+	if err := vd.enterDepth("interface"); err != nil {
+		return nil, err
+	}
+	defer func() { vd.depth-- }()
+	nameLen, err := decodeUint(r)
+	if err != nil {
+		return nil, err
+	}
+	if nameLen == 0 {
+		return InterfaceValue{Value: NilValue{}}, nil
+	}
+
+	nameBytes, err := readBytes(r, nameLen)
+	if err != nil {
+		return nil, err
+	}
+	typeName := string(nameBytes)
+
+	// Process the type sequence: zero or more inline type definitions
+	// (negative type IDs followed by wireType bodies) embedded in the current
+	// message body, then the positive concrete type ID.
+	// The positive ID may arrive from:
+	//   (a) the current message body (uncommon), or
+	//   (b) a new outer stream message (the normal case for interface values).
+	var concreteTypeID int
+	for {
+		id, err := decodeInt(r)
+		if err == io.EOF {
+			// Current message body exhausted; read the next outer message.
+			rawID, msgR, streamErr := vd.sd.nextRawMessage()
+			if streamErr != nil {
+				return nil, fmt.Errorf("gob: reading continuation for interface %q: %w", typeName, streamErr)
+			}
+			if rawID < 0 {
+				// Separate type def outer message: process and continue.
+				if err2 := vd.sd.processTypeDef(int(-rawID), msgR); err2 != nil {
+					return nil, err2
+				}
+				r.cur = msgR // now exhausted; loop will read another message
+				continue
+			}
+			// Positive type ID: the rest of this message is our value bytes.
+			r.cur = msgR
+			concreteTypeID = int(rawID)
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("gob: reading interface type sequence for %q: %w", typeName, err)
+		}
+		if id >= 0 {
+			// Concrete type ID found directly in the current message body.
+			concreteTypeID = int(id)
+			break
+		}
+		// Negative: inline type def in the current message body.
+		// Read wireType body and register it.
+		inlineID := int(-id)
+		def, defErr := decodeWireType(r)
+		if defErr != nil {
+			return nil, fmt.Errorf("gob: decoding inline wireType id %d for interface %q: %w", inlineID, typeName, defErr)
+		}
+		vd.sd.registry[inlineID] = def
+		// Populate sd.types so DecodeStream callers see all types.
+		if ti, tiErr := vd.sd.wireTypeToTypeInfo(inlineID, def); tiErr == nil {
+			vd.sd.types = append(vd.sd.types, ti)
+		}
+	}
+
+	// The encoder prefixes the concrete value bytes with their length.
+	valueLen, err := decodeUint(r)
+	if err != nil {
+		return nil, fmt.Errorf("gob: reading interface value length for %q: %w", typeName, err)
+	}
+	valueBytes, err := readBytes(r, valueLen)
+	if err != nil {
+		return nil, fmt.Errorf("gob: reading interface value body for %q: %w", typeName, err)
+	}
+
+	// Decode the concrete value using the top-level rules.
+	concreteR := &messageReader{cur: bytes.NewReader(valueBytes)}
+	concrete, err := vd.decodeTopLevelValue(concreteTypeID, concreteR)
+	if err != nil {
+		// Best-effort: preserve the type name even on decode failure.
+		return InterfaceValue{TypeName: typeName, Value: NilValue{}},
+			fmt.Errorf("gob: decoding interface concrete value %q: %w", typeName, err)
+	}
+	return InterfaceValue{TypeName: typeName, Value: concrete}, nil
+}
+
+// — Helper ———————————————————————————————————————————————————————————————
+
+// typeLabel returns a descriptive string for the given type ID.
+// Used to populate ElemType/KeyType labels in composite value nodes.
+func (vd *valueDecoder) typeLabel(id int) string {
+	if name, ok := builtinTypeName(id); ok {
+		return name
+	}
+	if def, ok := vd.registry[id]; ok {
+		if name := wireTypeDefName(def); name != "" {
+			return name
+		}
+	}
+	return fmt.Sprintf("type%d", id)
+}

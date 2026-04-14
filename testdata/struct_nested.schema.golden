@@ -1,0 +1,9 @@
+type NamedPoint struct {
+  Name  string
+  Pt    Point
+}
+
+type Point struct {
+  X  int
+  Y  int
+}

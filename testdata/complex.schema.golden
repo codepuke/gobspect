@@ -1,0 +1,16 @@
+type Time // GobEncoder
+
+type schemaItem struct {
+  Name  string
+  Qty   int
+}
+
+type schemaItemList []schemaItem
+
+type schemaOrder struct {
+  Items  schemaItemList
+  Stamp  Time  // GobEncoder
+  Tags   schemaTagMap
+}
+
+type schemaTagMap map[string]bool

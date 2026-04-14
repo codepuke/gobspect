@@ -1,0 +1,1 @@
+type IntArray [4]int
