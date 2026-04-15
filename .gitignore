@@ -4,7 +4,7 @@
 *.dll
 *.so
 *.dylib
-gq
+/gq
 
 # Ignore everything in dist/
 /dist/*
