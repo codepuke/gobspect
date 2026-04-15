@@ -766,6 +766,110 @@ func TestSegStringOrAltFilter(t *testing.T) {
 	assert.Contains(t, result, "|")
 }
 
+// — TestGetPath projection ——————————————————————————————————————————————————
+
+// TestGetPathProjectionStruct verifies projection on a struct yields an
+// anonymous StructValue with only the requested fields.
+func TestGetPathProjectionStruct(t *testing.T) {
+	root := makeStruct("Item",
+		field_("SKU", makeString("ABC-123")),
+		field_("Price", makeInt(42)),
+		field_("Stock", makeInt(100)),
+	)
+
+	v, ok := Get(root, "SKU,Price")
+	require.True(t, ok)
+
+	sv, isSV := v.(gobspect.StructValue)
+	require.True(t, isSV, "projection should return a StructValue")
+	assert.Equal(t, "", sv.TypeName, "projected struct should be anonymous")
+	require.Len(t, sv.Fields, 2)
+	assert.Equal(t, "SKU", sv.Fields[0].Name)
+	assert.Equal(t, makeString("ABC-123"), sv.Fields[0].Value)
+	assert.Equal(t, "Price", sv.Fields[1].Name)
+	assert.Equal(t, makeInt(42), sv.Fields[1].Value)
+}
+
+// TestGetPathProjectionMissingField verifies that a projected field not present
+// in the source struct is filled with NilValue.
+func TestGetPathProjectionMissingField(t *testing.T) {
+	root := makeStruct("Item",
+		field_("SKU", makeString("ABC-123")),
+	)
+
+	v, ok := Get(root, "SKU,MissingField")
+	require.True(t, ok)
+
+	sv := v.(gobspect.StructValue)
+	require.Len(t, sv.Fields, 2)
+	assert.Equal(t, "SKU", sv.Fields[0].Name)
+	assert.Equal(t, makeString("ABC-123"), sv.Fields[0].Value)
+	assert.Equal(t, "MissingField", sv.Fields[1].Name)
+	assert.Equal(t, gobspect.NilValue{}, sv.Fields[1].Value)
+}
+
+// TestGetPathProjectionMap verifies projection on a MapValue with string keys.
+func TestGetPathProjectionMap(t *testing.T) {
+	m := makeMap(
+		entry(makeString("color"), makeString("red")),
+		entry(makeString("size"), makeString("large")),
+		entry(makeString("weight"), makeInt(10)),
+	)
+
+	v, ok := Get(m, "color,size")
+	require.True(t, ok)
+
+	sv := v.(gobspect.StructValue)
+	require.Len(t, sv.Fields, 2)
+	assert.Equal(t, "color", sv.Fields[0].Name)
+	assert.Equal(t, makeString("red"), sv.Fields[0].Value)
+	assert.Equal(t, "size", sv.Fields[1].Name)
+	assert.Equal(t, makeString("large"), sv.Fields[1].Value)
+}
+
+// TestGetPathProjectionOnScalar verifies that projection on a non-struct/map
+// returns (nil, false).
+func TestGetPathProjectionOnScalar(t *testing.T) {
+	_, ok := Get(makeString("hello"), "A,B")
+	assert.False(t, ok)
+
+	_, ok = Get(makeInt(42), "A,B")
+	assert.False(t, ok)
+}
+
+// TestGetPathProjectionAfterWildcard verifies *.SKU,Price returns the
+// projection of the first element.
+func TestGetPathProjectionAfterWildcard(t *testing.T) {
+	items := makeSlice(
+		makeStruct("Item",
+			field_("SKU", makeString("A")),
+			field_("Price", makeInt(10)),
+			field_("Stock", makeInt(50)),
+		),
+		makeStruct("Item",
+			field_("SKU", makeString("B")),
+			field_("Price", makeInt(20)),
+			field_("Stock", makeInt(30)),
+		),
+	)
+
+	v, ok := Get(items, "*.SKU,Price")
+	require.True(t, ok, "Get should resolve *.SKU,Price")
+
+	sv := v.(gobspect.StructValue)
+	assert.Equal(t, "", sv.TypeName)
+	require.Len(t, sv.Fields, 2)
+	assert.Equal(t, "SKU", sv.Fields[0].Name)
+	assert.Equal(t, makeString("A"), sv.Fields[0].Value)
+}
+
+// TestSegStringProjectionCase verifies segString output for a segProject segment.
+func TestSegStringProjectionCase(t *testing.T) {
+	s := segment{kind: segProject, projectFields: []string{"A", "B", "C"}}
+	result := segString(s)
+	assert.Equal(t, "A,B,C", result)
+}
+
 // — helpers ——————————————————————————————————————————————————————————————————
 
 // mustParse is a test helper that calls Parse and panics on error.

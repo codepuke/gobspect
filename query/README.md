@@ -61,6 +61,7 @@ Segments are separated by `.`.
 | `[Field==value]`  | Filter: keep only elements where `Field` is a number equal to `value` (also `<`, `>`, `<=`, `>=`) |
 | `..Name` | Recursive descent: find all nodes named `Name` at any depth |
 | `..[Filter]` | Wildcard recursive descent: traverse all depths, keep nodes matching `Filter` |
+| `A,B,C` | Field projection: returns an anonymous struct containing only the requested fields |
 
 An empty path (`""`) resolves to the root value itself.
 
@@ -171,6 +172,22 @@ tagged := query.All(root, "Resources.*..[Tags~devops][Status=active]")
 > **Note:** `Get` returns the shallowest match; `All` returns all matches in depth-first pre-order.
 
 > **Note:** Multiple descents compose. `..A..B` finds all `B` fields anywhere within all `A` fields anywhere in the tree.
+
+## Field projection
+
+You can extract multiple fields from a struct or map simultaneously using a comma-separated projection. The result is a synthetic, anonymous `StructValue` containing exactly the requested fields.
+
+If a requested field does not exist in the source node, it is included in the output with a `NilValue`. This ensures that projected collections have a perfectly uniform shape, which is helpful when piping to tabular formatters like CSV.
+
+```go
+// Extract only SKU and Price from all items
+query.All(root, "Items.*.SKU,Price")
+
+// Extract fields from a single struct
+query.Get(root, "Orders.0.Customer.Name,Email")
+```
+
+> **Note:** Projection syntax `A,B` must be a single segment consisting of exact field names. You cannot nest paths inside a projection (i.e. `A,B.C` is not supported).
 
 ## Map key navigation
 

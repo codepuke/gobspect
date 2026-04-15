@@ -64,6 +64,10 @@ func SchemaAt(schema *gobspect.Schema, rootTypeExpr string, p Path) (string, err
 
 		case segDescend:
 			return "", fmt.Errorf("schema lookup: recursive descent (..) is not supported statically")
+
+		case segProject:
+			// Projection produces an anonymous struct; no schema entry exists.
+			currentExpr = "struct"
 		}
 	}
 	return currentExpr, nil

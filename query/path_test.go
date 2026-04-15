@@ -22,6 +22,7 @@ func notExistFilter(f string) segment       { return seg(segFilter, f, 0, filter
 func negGlobFilter(f, p string) segment     { return seg(segFilter, f, 0, filterOpNegGlob, p) }
 func negContainsFilter(f, p string) segment { return seg(segFilter, f, 0, filterOpNegContains, p) }
 func descent(name string) segment           { return seg(segDescend, name, 0, filterOpExist, "") }
+func projection(fields ...string) segment   { return segment{kind: segProject, projectFields: fields} }
 
 // numericFilter builds a segment for numeric comparison filter ops.
 func numericFilter(f, p string, op filterOp, val float64, ok bool) segment {
@@ -385,6 +386,32 @@ func TestParseSuccess(t *testing.T) {
 			expr: "..[A=x]|[B=y]",
 			segs: []segment{descent(""), orFilter(globFilter("A", "x"), globFilter("B", "y"))},
 		},
+		// Feature: field projection (comma-separated)
+		{
+			name: "two-field projection",
+			expr: "SKU,Price",
+			segs: []segment{projection("SKU", "Price")},
+		},
+		{
+			name: "three-field projection",
+			expr: "A,B,C",
+			segs: []segment{projection("A", "B", "C")},
+		},
+		{
+			name: "projection after wildcard",
+			expr: "Items.*.SKU,Price",
+			segs: []segment{field("Items"), wildcard(), projection("SKU", "Price")},
+		},
+		{
+			name: "projection after filter",
+			expr: "Items[Status=active].Name,SKU",
+			segs: []segment{field("Items"), globFilter("Status", "active"), projection("Name", "SKU")},
+		},
+		{
+			name: "projection with spaces around commas",
+			expr: "SKU, Price",
+			segs: []segment{projection("SKU", "Price")},
+		},
 	}
 
 	for _, tt := range tests {
@@ -498,6 +525,22 @@ func TestParseErrors(t *testing.T) {
 			name:    "pipe followed by non-bracket",
 			expr:    "[A!]|Field",
 			wantErr: "'|' must be followed by",
+		},
+		// Feature: projection error cases
+		{
+			name:    "projection with empty field (trailing comma)",
+			expr:    "SKU,",
+			wantErr: "invalid segment",
+		},
+		{
+			name:    "projection with empty field (leading comma)",
+			expr:    ",SKU",
+			wantErr: "invalid segment",
+		},
+		{
+			name:    "projection with double comma",
+			expr:    "SKU,,Price",
+			wantErr: "invalid segment",
 		},
 	}
 
@@ -744,6 +787,16 @@ func TestPathString(t *testing.T) {
 			path: mustParse("..[Tags~devops][Status=active]"),
 			want: "..[Tags~devops][Status=active]",
 		},
+		{
+			name: "projection two fields",
+			path: mustParse("SKU,Price"),
+			want: "SKU,Price",
+		},
+		{
+			name: "projection after dot-separated path",
+			path: mustParse("Items.*.SKU,Price"),
+			want: "Items.*.SKU,Price",
+		},
 	}
 
 	for _, tt := range tests {
@@ -791,6 +844,10 @@ func TestPathStringRoundTrip(t *testing.T) {
 		"[Status=active]|[Status=pending]",
 		"[A=x]|[B=y]|[C=z]",
 		"[A!][B=x]|[C!]",
+		// Feature: projection
+		"SKU,Price",
+		"A,B,C",
+		"Items.*.SKU,Price",
 	}
 
 	for _, expr := range exprs {

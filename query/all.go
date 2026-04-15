@@ -102,6 +102,13 @@ func allWalk(cur gobspect.Value, segs []segment) []gobspect.Value {
 		}
 		return out
 
+	case segProject:
+		projected := buildProjection(cur, seg.projectFields)
+		if projected == nil {
+			return nil
+		}
+		return allWalk(projected, rest)
+
 	default:
 		return nil
 	}

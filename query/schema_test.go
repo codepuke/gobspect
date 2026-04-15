@@ -45,8 +45,9 @@ func TestSchemaAt(t *testing.T) {
 		{"Tags.promo", "string", false}, // Tags is map[string]string
 		{"Missing", "", true},
 		{"Items.0.Missing", "", true},
-		{"ID.0", "", true}, // cannot index int
-		{"..Items", "", true}, // descent not supported statically
+		{"ID.0", "", true},       // cannot index int
+		{"..Items", "", true},    // descent not supported statically
+		{"SKU,Price", "struct", false}, // projection returns anonymous struct
 	}
 
 	for _, tt := range tests {

@@ -15,6 +15,7 @@ const (
 	segWildcard                // * — all elements
 	segFilter                  // [Field!], [Field=pattern], or [Field~pattern]
 	segDescend                 // ..name recursive descent (or wildcard descent when name is empty)
+	segProject                 // A,B,C — multi-field projection
 )
 
 // filterOp classifies the operator in a segFilter segment.
@@ -44,6 +45,7 @@ type segment struct {
 	filterNumVal  float64   // parsed numeric value for numeric comparison ops
 	filterNumOK   bool      // true if filterNumVal was successfully parsed
 	orAlts        []segment // non-nil = OR group; holds 2+ segFilter alternatives
+	projectFields []string  // segProject: field names to project
 }
 
 // Path is a compiled, reusable path expression. Obtain one with [Parse].
@@ -93,6 +95,11 @@ func (p Path) String() string {
 			// No dot prefix; '..' already carries the separator.
 			b.WriteString("..")
 			b.WriteString(s.name) // empty string for wildcard descent
+		case segProject:
+			if i > 0 {
+				b.WriteByte('.')
+			}
+			b.WriteString(strings.Join(s.projectFields, ","))
 		}
 	}
 	return b.String()
@@ -269,6 +276,23 @@ func parseDescentAt(expr string, pos int) (segment, int, error) {
 // parseToken converts a raw token string to a segment.
 // Returns (segment{}, false) for tokens that cannot be parsed.
 func parseToken(token string) (segment, bool) {
+	// Check for comma-separated projection (e.g. "SKU,Price").
+	if strings.Contains(token, ",") {
+		parts := strings.Split(token, ",")
+		fields := make([]string, 0, len(parts))
+		for _, p := range parts {
+			f := strings.TrimSpace(p)
+			if f == "" {
+				return segment{}, false
+			}
+			if strings.ContainsAny(f, ".[]!=~<> ") {
+				return segment{}, false
+			}
+			fields = append(fields, f)
+		}
+		return segment{kind: segProject, projectFields: fields}, true
+	}
+
 	if isIntegerToken(token) {
 		n, err := strconv.Atoi(token)
 		if err != nil {

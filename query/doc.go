@@ -26,6 +26,7 @@
 //   - Contains filter "[Field~pattern]" — keeps elements where Field is a slice/array/map containing a string matching pattern
 //   - Recursive descent "..Name" — finds all nodes named Name at any depth
 //   - Wildcard recursive descent "..[Filter]" — traverses all depths, keeping nodes matching Filter
+//   - Field projection "A,B" — returns an anonymous struct with only the selected fields
 //
 // An empty path resolves to the root value (identity).
 // InterfaceValue nodes are unwrapped transparently at every step.

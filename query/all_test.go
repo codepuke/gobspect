@@ -791,3 +791,63 @@ func TestDescendAll_MapValues(t *testing.T) {
 	assert.Equal(t, makeInt(10), got[0])
 	assert.Equal(t, makeInt(20), got[1])
 }
+
+// — TestAllPath projection ——————————————————————————————————————————————————
+
+// TestAllProjectionFanOut verifies *.SKU,Price returns a projected StructValue
+// per element in the collection.
+func TestAllProjectionFanOut(t *testing.T) {
+	items := makeSlice(
+		makeStruct("Item",
+			field_("SKU", makeString("A")),
+			field_("Price", makeInt(10)),
+			field_("Stock", makeInt(50)),
+		),
+		makeStruct("Item",
+			field_("SKU", makeString("B")),
+			field_("Price", makeInt(20)),
+			field_("Stock", makeInt(30)),
+		),
+	)
+
+	got := All(items, "*.SKU,Price")
+	require.Len(t, got, 2)
+
+	for i, v := range got {
+		sv, ok := v.(gobspect.StructValue)
+		require.True(t, ok, "result %d should be StructValue", i)
+		assert.Equal(t, "", sv.TypeName, "projected struct should be anonymous")
+		require.Len(t, sv.Fields, 2)
+		assert.Equal(t, "SKU", sv.Fields[0].Name)
+		assert.Equal(t, "Price", sv.Fields[1].Name)
+	}
+
+	assert.Equal(t, makeString("A"), got[0].(gobspect.StructValue).Fields[0].Value)
+	assert.Equal(t, makeString("B"), got[1].(gobspect.StructValue).Fields[0].Value)
+}
+
+// TestAllProjectionPreservesOrder verifies that the field order in the
+// projected result matches the query order, not the source struct order.
+func TestAllProjectionPreservesOrder(t *testing.T) {
+	root := makeStruct("Item",
+		field_("A", makeInt(1)),
+		field_("B", makeInt(2)),
+		field_("C", makeInt(3)),
+	)
+
+	// Query asks for C,A — reverse of the source order.
+	got := All(root, "C,A")
+	require.Len(t, got, 1)
+	sv := got[0].(gobspect.StructValue)
+	require.Len(t, sv.Fields, 2)
+	assert.Equal(t, "C", sv.Fields[0].Name)
+	assert.Equal(t, "A", sv.Fields[1].Name)
+	assert.Equal(t, makeInt(3), sv.Fields[0].Value)
+	assert.Equal(t, makeInt(1), sv.Fields[1].Value)
+}
+
+// TestAllProjectionOnScalar verifies projection on a scalar returns nil.
+func TestAllProjectionOnScalar(t *testing.T) {
+	got := All(makeString("hello"), "A,B")
+	assert.Nil(t, got)
+}

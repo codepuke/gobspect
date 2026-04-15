@@ -3,6 +3,7 @@ package query
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/codepuke/gobspect"
 )
@@ -95,6 +96,13 @@ func walkGetPath(root gobspect.Value, segs []segment) (gobspect.Value, bool, int
 			}
 			return results[0], true, -1
 
+		case segProject:
+			projected := buildProjection(cur, seg.projectFields)
+			if projected == nil {
+				return nil, false, i
+			}
+			cur = projected
+
 		default:
 			return nil, false, i
 		}
@@ -125,6 +133,8 @@ func segString(s segment) string {
 		}
 	case segDescend:
 		return ".." + s.name
+	case segProject:
+		return strings.Join(s.projectFields, ",")
 	default:
 		return "?"
 	}
