@@ -213,6 +213,8 @@ func parseSegments(expr string) ([]segment, error) {
 					last.filterIntOK = false
 					last.filterUintVal = 0
 					last.filterUintOK = false
+					last.filterBoolVal = false
+					last.filterBoolOK = false
 				} else {
 					last.orAlts = append(last.orAlts, nextSeg)
 				}
@@ -223,17 +225,20 @@ func parseSegments(expr string) ([]segment, error) {
 			i++
 
 		default:
-			// Read a name or integer token up to the next '.' or '['.
+			// Read a name or integer token up to the next separator.
 			j := i
-			for j < len(expr) && expr[j] != '.' && expr[j] != '[' {
+			for j < len(expr) && expr[j] != '.' && expr[j] != '[' && expr[j] != '|' && expr[j] != '*' {
 				j++
 			}
 			token := expr[i:j]
 			i = j
 
 			if token == "" {
-				// Shouldn't happen given the checks above, but guard anyway.
 				return nil, parseErr(i, "empty segment")
+			}
+
+			if strings.ContainsAny(token, "|") {
+				return nil, parseErr(i-len(token), "unexpected '|' (OR is only allowed between filters)")
 			}
 
 			if seg, ok := parseToken(token); ok {
@@ -271,9 +276,9 @@ func parseDescentAt(expr string, pos int) (segment, int, error) {
 	case '*':
 		return segment{}, 0, parseErr(nameStart, "recursive descent followed by '*' is reserved")
 	}
-	// Read name token up to the next '.' or '['.
+	// Read name token up to the next separator.
 	j := nameStart
-	for j < len(expr) && expr[j] != '.' && expr[j] != '[' {
+	for j < len(expr) && expr[j] != '.' && expr[j] != '[' && expr[j] != '|' && expr[j] != '*' {
 		j++
 	}
 	token := expr[nameStart:j]
@@ -295,7 +300,7 @@ func parseToken(token string) (segment, bool) {
 			if f == "" {
 				return segment{}, false
 			}
-			if strings.ContainsAny(f, ".[]!=~<> ") {
+			if strings.ContainsAny(f, ".[]!=~<>|* ") {
 				return segment{}, false
 			}
 			fields = append(fields, f)
@@ -310,6 +315,9 @@ func parseToken(token string) (segment, bool) {
 			return segment{kind: segField, name: token}, true
 		}
 		return segment{kind: segIndex, index: n}, true
+	}
+	if strings.ContainsAny(token, ".[]!=~<>|* ") {
+		return segment{}, false
 	}
 	// Anything else that is non-empty is a field/key name.
 	return segment{kind: segField, name: token}, true
@@ -601,7 +609,7 @@ func needsQuoting(p string) bool {
 	}
 	for i := 0; i < len(p); i++ {
 		switch p[i] {
-		case ']', '"', '\\':
+		case ']', '"', '\\', '!', '~', '=', '<', '>':
 			return true
 		}
 		// Control characters (newline, tab, CR, etc.) must be escaped.
