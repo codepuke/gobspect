@@ -226,9 +226,14 @@ query.Get(root, "Orders.0.Customer.Name,Email")
 
 Map navigation matches path segments (and filter field names) against map keys that are `StringValue` — i.e., maps declared as `map[string]T`. Maps with non-string keys (`map[int]T`, `map[uint64]T`, etc.) cannot be navigated by path: entries with non-string keys are silently skipped.
 
+Numeric-looking map keys (for `map[string]T` with `"42"` as a key) ARE navigable — integer-looking segments fall back to string key lookup when the node is a map.
+
 ```go
 // map[string]Address — works
 query.Get(root, "AddressBook.home.Street")
+
+// map[string]T where keys are "42", "100" — also works
+query.Get(root, "AddressBook.42.Street")
 
 // map[int]Order — index 0 is NOT navigable; use All + filter on a string field instead
 ```

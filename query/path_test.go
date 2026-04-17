@@ -1,6 +1,8 @@
 package query
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -26,7 +28,18 @@ func projection(fields ...string) segment   { return segment{kind: segProject, p
 
 // numericFilter builds a segment for numeric comparison filter ops.
 func numericFilter(f, p string, op filterOp, val float64, ok bool) segment {
-	return segment{kind: segFilter, name: f, filterOp: op, filterPattern: p, filterNumVal: val, filterNumOK: ok}
+	s := segment{kind: segFilter, name: f, filterOp: op, filterPattern: p, filterNumVal: val, filterNumOK: ok}
+	if ok && !strings.ContainsAny(p, ".eE") {
+		if iv, err := strconv.ParseInt(p, 10, 64); err == nil {
+			s.filterIntVal = iv
+			s.filterIntOK = true
+		}
+		if uv, err := strconv.ParseUint(p, 10, 64); err == nil {
+			s.filterUintVal = uv
+			s.filterUintOK = true
+		}
+	}
+	return s
 }
 
 // boolFilter builds a segment for a bool == comparison filter op.

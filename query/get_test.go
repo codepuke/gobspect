@@ -225,6 +225,28 @@ func TestGetPathMapStringKey(t *testing.T) {
 	}
 }
 
+// TestGetPathNumericMapKey verifies that numeric-looking segments correctly
+// navigate map[string]T by falling back to string-key lookup.
+func TestGetPathNumericMapKey(t *testing.T) {
+	m := makeMap(
+		entry(makeString("42"), makeString("The Answer")),
+		entry(makeString("100"), makeInt(100)),
+	)
+	root := makeStruct("Root", field_("m", m))
+
+	v, ok := Get(root, "m.42")
+	require.True(t, ok)
+	assert.Equal(t, makeString("The Answer"), v)
+
+	v, ok = Get(root, "m.100")
+	require.True(t, ok)
+	assert.Equal(t, makeInt(100), v)
+
+	// Negative index has no map fallback.
+	_, ok = Get(root, "m.-1")
+	assert.False(t, ok)
+}
+
 // TestGetPathMapNonStringKey verifies that map entries with non-string keys
 // are silently skipped during string-based navigation.
 func TestGetPathMapNonStringKey(t *testing.T) {

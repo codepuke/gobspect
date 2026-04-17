@@ -172,16 +172,25 @@ func stepField(v gobspect.Value, name string) (gobspect.Value, bool) {
 // stepIndex navigates a segIndex segment: resolves a positive or negative
 // integer index into a SliceValue or ArrayValue.
 func stepIndex(v gobspect.Value, index int) (gobspect.Value, bool) {
-	var elems []gobspect.Value
 	switch n := v.(type) {
+	case gobspect.MapValue:
+		// Fallback for numeric-looking keys in map[string]T.
+		// Negative indices have no meaningful map fallback.
+		if index < 0 {
+			return nil, false
+		}
+		return stepField(n, strconv.Itoa(index))
+
 	case gobspect.SliceValue:
-		elems = n.Elems
+		return stepSliceIndex(n.Elems, index)
 	case gobspect.ArrayValue:
-		elems = n.Elems
+		return stepSliceIndex(n.Elems, index)
 	default:
 		return nil, false
 	}
+}
 
+func stepSliceIndex(elems []gobspect.Value, index int) (gobspect.Value, bool) {
 	length := len(elems)
 	i := index
 	if i < 0 {
