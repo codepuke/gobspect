@@ -44,6 +44,8 @@ type segment struct {
 	filterPattern string    // segFilter [Field=pattern] or [Field~pattern] form
 	filterNumVal  float64   // parsed numeric value for numeric comparison ops
 	filterNumOK   bool      // true if filterNumVal was successfully parsed
+	filterBoolVal bool      // parsed bool value for == comparisons on bool fields
+	filterBoolOK  bool      // true if filterBoolVal was successfully parsed
 	orAlts        []segment // non-nil = OR group; holds 2+ segFilter alternatives
 	projectFields []string  // segProject: field names to project
 }
@@ -346,7 +348,7 @@ func parseFilter(expr string, start int) (segment, int, error) {
 		if field == "" {
 			return segment{}, 0, parseErr(start+1, "filter field name is empty")
 		}
-		if strings.ContainsAny(field, ".[]!= ") {
+		if strings.ContainsAny(field, ".[]!=~<> ") {
 			return segment{}, 0, parseErrf(start+1, "invalid filter field name %q", field)
 		}
 		consumed := 1 + len(basicInner) + 1 // '[' + inner + ']'
@@ -359,7 +361,7 @@ func parseFilter(expr string, start int) (segment, int, error) {
 		if field == "" {
 			return segment{}, 0, parseErr(start+1, "filter field name is empty")
 		}
-		if strings.ContainsAny(field, ".[]!= ") {
+		if strings.ContainsAny(field, ".[]!=~<> ") {
 			return segment{}, 0, parseErrf(start+1, "invalid filter field name %q", field)
 		}
 		consumed := 1 + len(basicInner) + 1 // '[' + inner + ']'
@@ -384,6 +386,7 @@ func parseFilter(expr string, start int) (segment, int, error) {
 		{"~", filterOpContains, false},
 	}
 
+	var lastErr error
 	for _, c := range candidates {
 		idx := strings.Index(basicInner, c.sep)
 		if idx < 0 {
@@ -391,10 +394,17 @@ func parseFilter(expr string, start int) (segment, int, error) {
 		}
 		field := basicInner[:idx]
 		if field == "" {
-			return segment{}, 0, parseErr(start+1, "filter field name is empty")
+			if lastErr == nil {
+				lastErr = parseErr(start+1, "filter field name is empty")
+			}
+			continue
 		}
-		if strings.ContainsAny(field, ".[]!= ") {
-			return segment{}, 0, parseErrf(start+1, "invalid filter field name %q", field)
+		if strings.ContainsAny(field, ".[]!=~<> ") {
+			if lastErr == nil {
+				// Suggest quoting if the user might be confusing the parser
+				lastErr = parseErrf(start+1, "invalid filter field name %q (quote pattern if it contains operators)", field)
+			}
+			continue
 		}
 
 		// Position of the character right after the operator separator in expr.
@@ -431,11 +441,26 @@ func parseFilter(expr string, start int) (segment, int, error) {
 			if err == nil {
 				seg.filterNumVal = val
 				seg.filterNumOK = true
+			} else {
+				// Accept bool literals (case-insensitive); reject everything else at parse time.
+				switch strings.ToLower(pattern) {
+				case "true":
+					seg.filterBoolOK = true
+					seg.filterBoolVal = true
+				case "false":
+					seg.filterBoolOK = true
+					seg.filterBoolVal = false
+				default:
+					return segment{}, 0, parseErrf(patternStart, "invalid filter value %q: expected a number or bool literal (true/false)", pattern)
+				}
 			}
 		}
 		return seg, consumed, nil
 	}
 
+	if lastErr != nil {
+		return segment{}, 0, lastErr
+	}
 	return segment{}, 0, parseErrf(start, "invalid filter %q: expected '!' suffix or '=' separator", basicInner)
 }
 

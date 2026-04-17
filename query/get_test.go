@@ -707,16 +707,59 @@ func TestMustGetPanicMessageContainsContainsFilter(t *testing.T) {
 	assert.Contains(t, msg, "[Tags~go]")
 }
 
-// TestCollectFilteredNonCollection verifies that applying a filter directly to a
-// scalar (non-collection) value returns (nil, false) from collectFiltered.
-// This is exercised when All/Get is called with a filter segment on a scalar root.
+// TestCollectFilteredNonCollection verifies that applying a filter to a
+// non-collection value that does NOT match the filter produces nil results.
+// Scalars like StringValue and IntValue have no fields, so filters on them
+// never match and always produce nil.
 func TestCollectFilteredNonCollection(t *testing.T) {
-	// A StringValue is not a collection; [Field!] cannot iterate over it.
+	// A StringValue has no fields; [Field!] cannot match it.
 	got := All(makeString("hello"), "[Field!]")
 	assert.Nil(t, got, "filter on a scalar should produce nil results")
 
 	got = All(makeInt(42), "[Status=active]")
 	assert.Nil(t, got, "filter on an int scalar should produce nil results")
+}
+
+// TestGetFilterOnNonCollectionMatchingStruct verifies that a filter segment
+// applied directly to a StructValue (not a collection) acts as a predicate:
+// when the struct passes the filter, Get returns the struct itself.
+func TestGetFilterOnNonCollectionMatchingStruct(t *testing.T) {
+	order := makeStruct("Order",
+		field_("Status", makeString("active")),
+		field_("Total", makeInt(50)),
+	)
+
+	// Filter applied directly to a struct — should match and return the struct.
+	v, ok := Get(order, "[Status=active]")
+	require.True(t, ok, "Get with [Status=active] on a matching struct should succeed")
+	assert.Equal(t, order, v)
+
+	// Non-matching filter should return (nil, false).
+	_, ok = Get(order, "[Status=cancelled]")
+	assert.False(t, ok, "Get with non-matching filter should return false")
+}
+
+// TestAllFilterOnNonCollectionViaPath verifies that Orders.0[Status=active]
+// treats the filter as a predicate when applied to the single struct at Orders.0.
+func TestAllFilterOnNonCollectionViaPath(t *testing.T) {
+	order0 := makeStruct("Order",
+		field_("Status", makeString("active")),
+		field_("Total", makeInt(50)),
+	)
+	order1 := makeStruct("Order",
+		field_("Status", makeString("cancelled")),
+		field_("Total", makeInt(75)),
+	)
+	root := makeStruct("Root", field_("Orders", makeSlice(order0, order1)))
+
+	// order0 has Status=active, so Orders.0[Status=active] should return [order0].
+	got := All(root, "Orders.0[Status=active]")
+	require.Len(t, got, 1, "All should return exactly one result")
+	assert.Equal(t, order0, got[0])
+
+	// order1 has Status=cancelled, so Orders.1[Status=active] should return nil.
+	got = All(root, "Orders.1[Status=active]")
+	assert.Nil(t, got, "non-matching filter on a single struct should return nil")
 }
 
 // TestSegStringDefaultCase verifies that segString returns "?" for an unknown

@@ -272,6 +272,36 @@ func TestMaxBytes_Zero_Unlimited(t *testing.T) {
 	require.Len(t, vals, 1)
 }
 
+func TestMaxBytes_ReadByteBoundary(t *testing.T) {
+	// Build a two-value stream using a single encoder so both values share one
+	// type-definition message.  The byte layout is:
+	//   [type-def msg][value1 msg][value2 msg]
+	// Using a separate single-value encoder gives us the exact offset where
+	// value2's length-prefix varint starts.  That first byte is read via
+	// ReadByte on the countingReader — the code path under test.
+	multi := gobEncodeMultiple(t, Point{X: 1, Y: 2}, Point{X: 3, Y: 4})
+	multiBytes := multi.Bytes()
+
+	single := gobEncode(t, Point{X: 1, Y: 2})
+	boundary := int64(single.Len())
+
+	// Sanity: both encoders produce identical bytes for the shared prefix.
+	require.Equal(t, single.Bytes(), multiBytes[:boundary],
+		"single-value and multi-value streams must share a common prefix")
+
+	// With MaxBytes == boundary the countingReader has consumed exactly
+	// `boundary` bytes after value1.  The next ReadByte call (for value2's
+	// length prefix) increments cr.n to boundary+1, exceeding the limit.
+	// The error must surface cleanly via ReadByte, not be silently swallowed.
+	ins := gobspect.New(gobspect.WithOptions(gobspect.Options{MaxBytes: boundary}))
+	vals, err := ins.Decode(bytes.NewReader(multiBytes))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "MaxBytes",
+		"limit error must name MaxBytes so callers can identify it")
+	// value1 was fully decoded before the limit was hit.
+	require.Len(t, vals, 1)
+}
+
 func TestMaxBytes_PartialResults(t *testing.T) {
 	// Encode two values; MaxBytes triggers during the second. The first value
 	// should still be returned with the error.

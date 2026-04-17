@@ -97,12 +97,15 @@ func matchesFilter(v gobspect.Value, seg segment) bool {
 			return false
 		}
 		fv = unwrapInterface(fv)
-		// BoolValue: only == is supported; compare pattern string directly.
+		// BoolValue: only == is supported; use the pre-parsed bool value.
 		if bv, ok := fv.(gobspect.BoolValue); ok {
 			if seg.filterOp != filterOpNumEq {
 				return false
 			}
-			return (seg.filterPattern == "true") == bv.V
+			if !seg.filterBoolOK {
+				return false
+			}
+			return seg.filterBoolVal == bv.V
 		}
 		// For numeric types, require a successfully parsed numeric pattern.
 		if !seg.filterNumOK {

@@ -37,6 +37,154 @@ func decodeOpaque(tb testing.TB, buf *bytes.Buffer) OpaqueValue {
 	return ov
 }
 
+// — parseTimeBytes round-trip tests ——————————————————————————————————————————
+
+// TestParseTimeBytes_RoundTrip verifies that parseTimeBytes produces the same
+// unixSec, nsec, and offsetSec as stdlib time.Time.UnmarshalBinary for a
+// variety of wire encodings. We encode with time.MarshalBinary, which exercises
+// the real wire format including the version-2 sub-minute path.
+func TestParseTimeBytes_RoundTrip(t *testing.T) {
+	cases := []struct {
+		name string
+		t    time.Time
+	}{
+		{
+			// UTC sentinel: offsetMin == -1 (0xFFFF), version 1.
+			name: "UTC",
+			t:    time.Date(2024, 6, 15, 12, 0, 0, 0, time.UTC),
+		},
+		{
+			// Positive minute-boundary offset: +05:30 = +19800s, version 1.
+			name: "positive offset +05:30",
+			t:    time.Date(2024, 6, 15, 12, 0, 0, 0, time.FixedZone("IST", 5*3600+30*60)),
+		},
+		{
+			// Negative minute-boundary offset: -06:00 = -21600s, version 1.
+			name: "negative offset -06:00",
+			t:    time.Date(2024, 6, 15, 12, 0, 0, 0, time.FixedZone("CST", -6*3600)),
+		},
+		{
+			// Sub-minute positive offset: +05:30:15 = +19815s, version 2.
+			// offsetMin = 330 (0x014A), offsetSec byte = 15 (0x0F).
+			// Both signed and unsigned reads agree: int(int8(15)) == int(15).
+			name: "sub-minute positive +05:30:15",
+			t:    time.Date(2024, 6, 15, 12, 0, 0, 0, time.FixedZone("", 5*3600+30*60+15)),
+		},
+		{
+			// Sub-minute negative offset: -04:56:02 = -17762s, version 2.
+			// In Go truncated division: -17762 % 60 = -2, so offsetSec = int8(-2) = 0xFE.
+			// stdlib UnmarshalBinary reads byte 15 unsigned: int(0xFE) = 254.
+			// Decoded offset = -296*60 + 254 = -17506, not -17762.
+			// Our parseTimeBytes must match this stdlib behavior.
+			name: "sub-minute negative -04:56:02",
+			t:    time.Date(1880, 1, 1, 0, 0, 0, 0, time.FixedZone("", -(4*3600+56*60+2))),
+		},
+		{
+			// Pre-1970 timestamp: exercises floor division in secondsToCivil.
+			name: "pre-1970",
+			t:    time.Date(1965, 7, 4, 12, 0, 0, 0, time.UTC),
+		},
+		{
+			// Pre-epoch with nanoseconds to also exercise nsec parsing.
+			name: "pre-1970 with nanoseconds",
+			t:    time.Date(1965, 7, 4, 12, 0, 0, 500000000, time.UTC),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := tc.t.MarshalBinary()
+			require.NoError(t, err)
+
+			// Our decoder.
+			gotUnixSec, gotNsec, gotOffsetSec, err := parseTimeBytes(raw)
+			require.NoError(t, err)
+
+			// Reference: stdlib UnmarshalBinary.
+			var ref time.Time
+			require.NoError(t, ref.UnmarshalBinary(raw))
+
+			// The absolute instant must agree.
+			assert.Equal(t, ref.Unix(), gotUnixSec, "unix seconds mismatch")
+			assert.Equal(t, int32(ref.Nanosecond()), gotNsec, "nanoseconds mismatch")
+
+			// The reconstructed zone offset must match stdlib's reconstruction
+			// exactly, including any quirks in how stdlib interprets byte 15.
+			_, refOffsetSec := ref.Zone()
+			assert.Equal(t, refOffsetSec, gotOffsetSec, "zone offset mismatch")
+		})
+	}
+}
+
+// TestParseTimeBytes_Version2_SubMinutePositive explicitly checks the version-2
+// byte layout for a positive sub-minute offset to confirm byte 15 semantics.
+func TestParseTimeBytes_Version2_SubMinutePositive(t *testing.T) {
+	// +05:30:15 = 19815s: offsetMin=330 (0x014A), offsetSec byte=15 (0x0F).
+	// MarshalBinary emits version=2, then the standard fields, then byte 0x0F.
+	loc := time.FixedZone("", 5*3600+30*60+15)
+	ts := time.Date(2024, 1, 1, 0, 0, 0, 0, loc)
+	raw, err := ts.MarshalBinary()
+	require.NoError(t, err)
+	require.Equal(t, 16, len(raw), "version-2 encoding must be 16 bytes")
+	assert.Equal(t, byte(2), raw[0], "version byte must be 2")
+	assert.Equal(t, byte(0x0F), raw[15], "sub-minute byte must be 15 (0x0F)")
+
+	_, _, offsetSec, err := parseTimeBytes(raw)
+	require.NoError(t, err)
+	assert.Equal(t, 19815, offsetSec)
+}
+
+// TestParseTimeBytes_Version2_SubMinuteNegative checks that byte 15 is read
+// the same way as stdlib UnmarshalBinary (as an unsigned byte, not int8).
+// For a -4h56m2s offset, offsetSec = int8(-2) stored as byte 0xFE.
+// stdlib reads int(0xFE)=254 and adds to base -17760 → -17506.
+// Our parseTimeBytes must produce -17506, not -17762.
+func TestParseTimeBytes_Version2_SubMinuteNegative(t *testing.T) {
+	offset := -(4*3600 + 56*60 + 2) // -17762 seconds
+	loc := time.FixedZone("", offset)
+	ts := time.Date(1880, 1, 1, 0, 0, 0, 0, loc)
+	raw, err := ts.MarshalBinary()
+	require.NoError(t, err)
+	require.Equal(t, 16, len(raw), "version-2 encoding must be 16 bytes")
+	assert.Equal(t, byte(2), raw[0], "version byte must be 2 for sub-minute offset")
+	// byte 15 must be int8(-2) reinterpreted as byte = 0xFE
+	assert.Equal(t, byte(0xFE), raw[15], "sub-minute byte must be 0xFE for -2s component")
+
+	_, _, gotOffsetSec, err := parseTimeBytes(raw)
+	require.NoError(t, err)
+
+	// Cross-check against stdlib.
+	var ref time.Time
+	require.NoError(t, ref.UnmarshalBinary(raw))
+	_, refOffsetSec := ref.Zone()
+
+	assert.Equal(t, refOffsetSec, gotOffsetSec,
+		"parseTimeBytes must match stdlib UnmarshalBinary zone offset reconstruction")
+}
+
+// TestParseTimeBytes_Versions verifies that version 1 is accepted, version 2
+// is accepted (with a 16-byte payload), and all other version bytes are rejected.
+func TestParseTimeBytes_Versions(t *testing.T) {
+	// Valid version-1 blob (15 bytes, UTC).
+	v1 := []byte{0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF}
+	_, _, _, err := parseTimeBytes(v1)
+	require.NoError(t, err, "version 1 must be accepted")
+
+	// Valid version-2 blob (16 bytes, UTC with sub-minute byte).
+	v2 := []byte{0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0x0F}
+	_, _, _, err = parseTimeBytes(v2)
+	require.NoError(t, err, "version 2 must be accepted")
+
+	// Version 3 and above must be rejected.
+	for _, ver := range []byte{3, 4, 10, 255} {
+		blob := make([]byte, 16)
+		blob[0] = ver
+		_, _, _, err = parseTimeBytes(blob)
+		require.Error(t, err, "version %d must be rejected", ver)
+		assert.Contains(t, err.Error(), "unsupported version", "error must mention 'unsupported version'")
+	}
+}
+
 // — Unit tests: decoder functions ————————————————————————————————————————————
 
 func TestDecodeTime_Version1_UTC(t *testing.T) {
@@ -380,17 +528,61 @@ func TestDecodeBigFloat_Pi(t *testing.T) {
 
 // — decodeShopspringDecimal ————————————————————————————————————————————————————
 
-func TestDecodeShopspringDecimal_123_45(t *testing.T) {
-	// Hand-constructed binary format: big.Int 12345 (sign/version byte 0x02 +
-	// big-endian abs 0x30 0x39) followed by int32(-2) as big-endian bytes.
-	// 12345 × 10^(-2) = 123.45
-	data := []byte{
-		0x02, 0x30, 0x39, // big.Int 12345: version/sign=0x02, abs=0x3039
-		0xFF, 0xFF, 0xFF, 0xFE, // int32(-2) big-endian
+func TestDecodeShopspringDecimal(t *testing.T) {
+	// Wire format: big.Int bytes (sign/version + big-endian abs) followed by
+	// int32 exponent as 4 big-endian bytes. Value = intCoeff × 10^exp.
+	//
+	// big.Int zero:  [0x02]           (version/sign byte only, no abs bytes)
+	// big.Int 12345: [0x02, 0x30, 0x39]
+	// big.Int -1:    [0x03, 0x01]
+	cases := []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{
+			name: "zero × 10^0",
+			data: []byte{0x02, 0x00, 0x00, 0x00, 0x00},
+			want: "0",
+		},
+		{
+			name: "zero × 10^3 (positive exponent)",
+			data: []byte{0x02, 0x00, 0x00, 0x00, 0x03},
+			want: "0",
+		},
+		{
+			name: "zero × 10^-2 (negative exponent)",
+			data: []byte{0x02, 0xFF, 0xFF, 0xFF, 0xFE},
+			want: "0",
+		},
+		{
+			name: "12345 × 10^-2 = 123.45",
+			data: []byte{0x02, 0x30, 0x39, 0xFF, 0xFF, 0xFF, 0xFE},
+			want: "123.45",
+		},
+		{
+			name: "12345 × 10^0 = 12345",
+			data: []byte{0x02, 0x30, 0x39, 0x00, 0x00, 0x00, 0x00},
+			want: "12345",
+		},
+		{
+			name: "1 × 10^3 = 1000",
+			data: []byte{0x02, 0x01, 0x00, 0x00, 0x00, 0x03},
+			want: "1000",
+		},
+		{
+			name: "-1 × 10^-1 = -0.1",
+			data: []byte{0x03, 0x01, 0xFF, 0xFF, 0xFF, 0xFF},
+			want: "-0.1",
+		},
 	}
-	got, err := decodeShopspringDecimal(data)
-	require.NoError(t, err)
-	assert.Equal(t, "123.45", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := decodeShopspringDecimal(tc.data)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }
 
 // — WithTimeFormat ————————————————————————————————————————————————————————————
@@ -461,4 +653,197 @@ func TestNew_UserCanOverride(t *testing.T) {
 	require.True(t, ok)
 	assert.True(t, called, "custom decoder was not invoked")
 	assert.Equal(t, "custom", ov.Decoded)
+}
+
+func TestRegisterDecoder_TimeCombinations(t *testing.T) {
+	ts := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	buf := gobEncodeVal(t, ts)
+
+	// Since decoding consumes the buffer, we provide a fresh reader for each case
+	getBuf := func() *bytes.Buffer {
+		return bytes.NewBuffer(buf.Bytes())
+	}
+
+	customDecoder := func(data []byte) (any, error) {
+		return "OVERRIDDEN", nil
+	}
+
+	cases := []struct {
+		name     string
+		setup    func() *Inspector
+		expected string
+	}{
+		{
+			name: "(a) default time.Time rendering",
+			setup: func() *Inspector {
+				return New()
+			},
+			expected: "2025-01-01T12:00:00Z",
+		},
+		{
+			name: "(b) WithTimeFormat custom layout",
+			setup: func() *Inspector {
+				return New(WithTimeFormat("2006"))
+			},
+			expected: "2025",
+		},
+		{
+			name: "(c) RegisterDecoder after New overriding the built-in",
+			setup: func() *Inspector {
+				ins := New()
+				ins.RegisterDecoder("Time", customDecoder)
+				return ins
+			},
+			expected: "OVERRIDDEN",
+		},
+		{
+			name: "(d) WithTimeFormat combined with subsequent RegisterDecoder where the latter wins",
+			setup: func() *Inspector {
+				ins := New(WithTimeFormat("2006"))
+				ins.RegisterDecoder("Time", customDecoder)
+				return ins
+			},
+			expected: "OVERRIDDEN",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ins := tc.setup()
+			vals, err := ins.Decode(getBuf())
+			require.NoError(t, err)
+			require.Len(t, vals, 1)
+
+			ov, ok := vals[0].(OpaqueValue)
+			require.True(t, ok)
+			assert.Equal(t, tc.expected, ov.Decoded)
+		})
+	}
+}
+
+// — decodeBigAuto round-trip table ————————————————————————————————————————————
+
+// TestDecodeBigAuto_RoundTrip encodes a range of *big.Int and *big.Rat values
+// via encoding/gob (which exercises the real GobEncoder wire format) and
+// asserts that decodeBigAuto returns the same decimal rendering as the Go
+// type's own String/RatString method.
+//
+// Boundary cases covered:
+//   - big.Int values around 2^32 (5-byte absolute value, where data[1:5] as
+//     uint32 would be a large numLen — safe because data[1] is always non-zero)
+//   - A very large big.Int (many bytes) to confirm the numLen >> len(data)-5
+//   - Zero big.Int and zero big.Rat
+//   - big.Rat with numLen==0 (numerator is zero)
+//   - big.Rat where numerator and denominator lengths vary
+func TestDecodeBigAuto_RoundTrip(t *testing.T) {
+	mustInt := func(s string) *big.Int {
+		n, ok := new(big.Int).SetString(s, 10)
+		require.True(t, ok, "invalid big.Int literal %q", s)
+		return n
+	}
+	mustRat := func(num, den int64) *big.Rat {
+		return new(big.Rat).SetFrac(big.NewInt(num), big.NewInt(den))
+	}
+
+	intCases := []struct {
+		name string
+		val  *big.Int
+	}{
+		{"zero", big.NewInt(0)},
+		{"one", big.NewInt(1)},
+		{"negative one", big.NewInt(-1)},
+		{"small positive", big.NewInt(12345)},
+		{"small negative", big.NewInt(-99999)},
+		// 3-byte absolute value: 0x01_00_00 = 65536
+		{"65536 (3-byte abs)", big.NewInt(65536)},
+		// 4-byte absolute value: values in [2^24, 2^32-1]
+		{"2^24", mustInt("16777216")},
+		{"2^32-1", mustInt("4294967295")},
+		// 5-byte absolute value: values in [2^32, 2^40-1]
+		// data[1:5] = first 4 bytes of abs; data[1] != 0 so numLen >= 2^24 >> len(data)-5
+		{"2^32", mustInt("4294967296")},
+		{"2^32+1", mustInt("4294967297")},
+		{"2^32+small", mustInt("4295032833")}, // 2^32 + 0xFFFF
+		{"2^40-1", mustInt("1099511627775")},
+		// Large values: 8-byte absolute value (2^56..2^64-1)
+		{"2^63-1", mustInt("9223372036854775807")},
+		{"2^64", mustInt("18446744073709551616")},
+		// Very large: 20-digit decimal, abs > 8 bytes
+		{"20-digit", mustInt("12345678901234567890123456789")},
+		// Negative large
+		{"-2^32", mustInt("-4294967296")},
+		{"-2^64", mustInt("-18446744073709551616")},
+	}
+
+	ratCases := []struct {
+		name string
+		val  *big.Rat
+		want string // expected RatString
+	}{
+		// Zero Rat: numerator=0, numLen=0; decodeBigAuto must route to Rat not Int.
+		{"zero rat", mustRat(0, 1), "0"},
+		// Integer Rat (denominator normalises to 1): result is just numerator.
+		{"rat 1/1", mustRat(1, 1), "1"},
+		{"rat 7/1", mustRat(7, 1), "7"},
+		{"rat -3/1", mustRat(-3, 1), "-3"},
+		// Simple fractions
+		{"1/2", mustRat(1, 2), "1/2"},
+		{"355/113", mustRat(355, 113), "355/113"},
+		{"negative -1/3", mustRat(-1, 3), "-1/3"},
+		// Larger numerator/denominator
+		{"1000000/999999", mustRat(1000000, 999999), "1000000/999999"},
+		// numLen boundary: numerator fits in 1 byte (numLen=1), denominator varies
+		{"127/128", mustRat(127, 128), "127/128"},
+		// Large numerator: numLen = 3 bytes
+		{"16777215/2", mustRat(16777215, 2), "16777215/2"},
+	}
+
+	t.Run("big.Int", func(t *testing.T) {
+		for _, tc := range intCases {
+			t.Run(tc.name, func(t *testing.T) {
+				buf := gobEncodeVal(t, tc.val)
+				ov := decodeOpaque(t, buf)
+				require.NotNil(t, ov.Decoded, "Decoded must not be nil for big.Int %s", tc.val.String())
+				got, ok := ov.Decoded.(string)
+				require.True(t, ok, "Decoded should be a string, got %T", ov.Decoded)
+				assert.Equal(t, tc.val.String(), got, "big.Int %s: wrong decoded value", tc.val.String())
+			})
+		}
+	})
+
+	t.Run("big.Rat", func(t *testing.T) {
+		for _, tc := range ratCases {
+			t.Run(tc.name, func(t *testing.T) {
+				buf := gobEncodeVal(t, tc.val)
+				ov := decodeOpaque(t, buf)
+				require.NotNil(t, ov.Decoded, "Decoded must not be nil for big.Rat %s", tc.want)
+				got, ok := ov.Decoded.(string)
+				require.True(t, ok, "Decoded should be a string, got %T", ov.Decoded)
+				assert.Equal(t, tc.want, got, "big.Rat %s: wrong decoded value", tc.want)
+			})
+		}
+	})
+}
+
+// TestDecodeBigAuto_ExactLengthCheck verifies the tightened heuristic: a
+// big.Rat blob is accepted only when 5 + numLen <= len(data) (existing check)
+// AND 5 + numLen == len(data) when numLen == 0 would yield an empty denominator
+// (zero Rat). This test encodes crafted byte slices that would be
+// misidentified as big.Rat under a looser check.
+func TestDecodeBigAuto_ExactLengthCheck(t *testing.T) {
+	// A big.Int blob whose absolute value is [0x01, 0x00, 0x00, 0x00, 0x00]:
+	//   data = [0x02, 0x01, 0x00, 0x00, 0x00, 0x00]
+	//   len(data)-5 = 1
+	//   numLen = 0x01000000 = 16777216  →  16777216 <= 1? No → Int. ✓
+	data := []byte{0x02, 0x01, 0x00, 0x00, 0x00, 0x00}
+	got, err := decodeBigAuto(data)
+	require.NoError(t, err)
+	assert.Equal(t, "4294967296", got, "should decode as big.Int(2^32), not misrouted to Rat")
+
+	// A crafted big.Rat zero blob: [0x02, 0x00,0x00,0x00,0x00, 0x01]
+	//   numLen = 0, len(data)-5 = 1 → 0 <= 1 → routes to Rat → "0". ✓
+	ratZero := []byte{0x02, 0x00, 0x00, 0x00, 0x00, 0x01}
+	got2, err2 := decodeBigAuto(ratZero)
+	require.NoError(t, err2)
+	assert.Equal(t, "0", got2, "big.Rat zero should decode as 0")
 }

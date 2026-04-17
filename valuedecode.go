@@ -432,6 +432,9 @@ func (vd *valueDecoder) decodeInterface(r *messageReader) (Value, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gob: reading interface value length for %q: %w", typeName, err)
 	}
+	if valueLen == 0 {
+		return nil, fmt.Errorf("gob: interface %q has zero-length value body", typeName)
+	}
 	valueBytes, err := readBytes(r, valueLen)
 	if err != nil {
 		return nil, fmt.Errorf("gob: reading interface value body for %q: %w", typeName, err)

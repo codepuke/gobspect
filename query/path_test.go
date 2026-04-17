@@ -29,6 +29,11 @@ func numericFilter(f, p string, op filterOp, val float64, ok bool) segment {
 	return segment{kind: segFilter, name: f, filterOp: op, filterPattern: p, filterNumVal: val, filterNumOK: ok}
 }
 
+// boolFilter builds a segment for a bool == comparison filter op.
+func boolFilter(f, p string, val bool) segment {
+	return segment{kind: segFilter, name: f, filterOp: filterOpNumEq, filterPattern: p, filterBoolOK: true, filterBoolVal: val}
+}
+
 // orFilter builds an OR-group segment from 2+ filter segment alternatives.
 func orFilter(alts ...segment) segment {
 	return segment{kind: segFilter, orAlts: alts}
@@ -130,6 +135,26 @@ func TestParseSuccess(t *testing.T) {
 			name: "glob filter with contains pattern",
 			expr: "Orders[Status=*foo*]",
 			segs: []segment{field("Orders"), globFilter("Status", "*foo*")},
+		},
+		{
+			name: "glob filter with < in pattern",
+			expr: "[Name=a<b]",
+			segs: []segment{globFilter("Name", "a<b")},
+		},
+		{
+			name: "glob filter with > in pattern",
+			expr: "[Name=a>b]",
+			segs: []segment{globFilter("Name", "a>b")},
+		},
+		{
+			name: "glob filter with ~ in pattern",
+			expr: "[Name=a~b]",
+			segs: []segment{globFilter("Name", "a~b")},
+		},
+		{
+			name: "contains filter with > in pattern",
+			expr: "[Tags~prod>dev]",
+			segs: []segment{containsFilter("Tags", "prod>dev")},
 		},
 		{
 			name: "glob filter with ?* pattern (non-empty)",
@@ -352,9 +377,19 @@ func TestParseSuccess(t *testing.T) {
 			segs: []segment{numericFilter("Count", "1", filterOpNumGTE, 1.0, true)},
 		},
 		{
-			name: "numeric equality with non-numeric pattern",
-			expr: "[Count==abc]",
-			segs: []segment{numericFilter("Count", "abc", filterOpNumEq, 0.0, false)},
+			name: "bool equality with 'true' literal",
+			expr: "[Enabled==true]",
+			segs: []segment{boolFilter("Enabled", "true", true)},
+		},
+		{
+			name: "bool equality with 'false' literal",
+			expr: "[Enabled==false]",
+			segs: []segment{boolFilter("Enabled", "false", false)},
+		},
+		{
+			name: "bool equality with 'TRUE' (case-insensitive)",
+			expr: "[Enabled==TRUE]",
+			segs: []segment{boolFilter("Enabled", "TRUE", true)},
 		},
 		// Feature 4 (OR operator): two-way OR
 		{
@@ -491,6 +526,11 @@ func TestParseErrors(t *testing.T) {
 			wantErr: "invalid filter field name",
 		},
 		{
+			name:    "operator interpreted incorrectly fails on value validation",
+			expr:    "[Foo<bar>baz]",
+			wantErr: "invalid filter value \"bar>baz\": expected a number or bool literal",
+		},
+		{
 			name:    "not-exist filter with empty field name",
 			expr:    "[!!]",
 			wantErr: "filter field name is empty",
@@ -541,6 +581,17 @@ func TestParseErrors(t *testing.T) {
 			name:    "projection with double comma",
 			expr:    "SKU,,Price",
 			wantErr: "invalid segment",
+		},
+		// Bool/numeric filter error cases
+		{
+			name:    "non-numeric non-bool pattern on == operator",
+			expr:    "[Count==abc]",
+			wantErr: "abc",
+		},
+		{
+			name:    "banana is not a valid bool or number",
+			expr:    "[Enabled==banana]",
+			wantErr: "banana",
 		},
 	}
 

@@ -1022,14 +1022,11 @@ func TestFilterNumAbsentField(t *testing.T) {
 	assert.Nil(t, got)
 }
 
-// TestFilterNumBadPattern verifies that a non-numeric pattern (filterNumOK=false) never matches.
+// TestFilterNumBadPattern verifies that a non-numeric, non-bool pattern is a parse-time error.
 func TestFilterNumBadPattern(t *testing.T) {
-	items := makeSlice(
-		makeStruct("Item", field_("Count", makeInt(5)), field_("ID", makeInt(1))),
-	)
-
-	got := All(items, "[Count==abc]")
-	assert.Nil(t, got)
+	_, err := Parse("[Count==abc]")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "abc")
 }
 
 // TestFilterNumStringFieldRejected verifies that StringValue is not matched by numeric ops.
@@ -1172,4 +1169,57 @@ func TestFilterORInWildcardDescent(t *testing.T) {
 
 	got := All(root, "..[Status=active]|[Status=pending]")
 	require.Len(t, got, 2)
+}
+
+// — [Field==true/false] bool filter edge cases ———————————————————————————————
+
+// TestFilterBoolEqEdgeCases is a table-driven test covering bool filter matching,
+// case-insensitive literal parsing, and parse-time rejection of invalid literals.
+func TestFilterBoolEqEdgeCases(t *testing.T) {
+	trueItem  := makeStruct("Item", field_("Enabled", makeBool(true)),  field_("ID", makeInt(1)))
+	falseItem := makeStruct("Item", field_("Enabled", makeBool(false)), field_("ID", makeInt(2)))
+	both      := makeSlice(trueItem, falseItem)
+
+	matchCases := []struct {
+		name    string
+		filter  string
+		input   gobspect.Value
+		wantLen int
+		wantID  int64
+	}{
+		{"[Enabled==true] matches BoolValue{true}",          "[Enabled==true]",  both,      1, 1},
+		{"[Enabled==true] no match BoolValue{false}",        "[Enabled==true]",  falseItem, 0, 0},
+		{"[Enabled==false] matches BoolValue{false}",        "[Enabled==false]", both,      1, 2},
+		{"[Enabled==false] no match BoolValue{true}",        "[Enabled==false]", trueItem,  0, 0},
+		{"[Enabled==TRUE] matches BoolValue{true} case-ins", "[Enabled==TRUE]",  both,      1, 1},
+		{"[Enabled==FALSE] matches BoolValue{false} case-ins","[Enabled==FALSE]", both,     1, 2},
+	}
+	for _, tc := range matchCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := All(tc.input, tc.filter)
+			if tc.wantLen == 0 {
+				assert.Nil(t, got)
+			} else {
+				require.Len(t, got, tc.wantLen)
+				assert.Equal(t, makeInt(tc.wantID), MustGet(got[0], "ID"))
+			}
+		})
+	}
+
+	// Non-bool, non-numeric patterns on == must be rejected at parse time.
+	errCases := []struct {
+		name    string
+		filter  string
+		wantIn  string
+	}{
+		{"banana is not a bool or number",   "[Enabled==banana]",  "banana"},
+		{"bare word is not a bool or number", "[Enabled==notabool]", "notabool"},
+	}
+	for _, tc := range errCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse(tc.filter)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantIn)
+		})
+	}
 }

@@ -224,13 +224,25 @@ func collectAll(v gobspect.Value) []gobspect.Value {
 	return nil
 }
 
-// collectFiltered returns the elements of a collection that pass the filter seg.
-// Returns (nil, false) if v is not a collection type.
+// collectFiltered applies filter seg to v and returns the matching values.
+//
+// If v is a collection (SliceValue, ArrayValue, MapValue), it iterates over the
+// elements and returns those that pass the filter.
+//
+// If v is not a collection, the filter is applied to v itself as a predicate:
+//   - If v passes the filter, returns ([v], true).
+//   - If v does not pass the filter, returns (nil, true).
+//
+// The second return value is always true; the (nil, true) form lets callers
+// distinguish "filter applied but nothing passed" from a future error path.
 func collectFiltered(v gobspect.Value, seg segment) ([]gobspect.Value, bool) {
 	elems := collectAll(v)
 	if elems == nil {
-		// Not a collection — check if v itself matches the filter directly.
-		return nil, false
+		// Not a collection — treat filter as a predicate applied directly to v.
+		if matchesFilter(unwrapInterface(v), seg) {
+			return []gobspect.Value{v}, true
+		}
+		return nil, true
 	}
 
 	var out []gobspect.Value

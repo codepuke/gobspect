@@ -58,7 +58,7 @@ Segments are separated by `.`.
 | `[Field!=pattern]`| Filter: keep only elements where `Field` is a string NOT matching `pattern` |
 | `[Field~pattern]` | Filter: keep only elements where `Field` is a slice/array/map containing a string matching `pattern` |
 | `[Field!~pattern]`| Filter: keep only elements where `Field` is a slice/array/map NOT containing a string matching `pattern` |
-| `[Field==value]`  | Filter: keep only elements where `Field` is a number equal to `value` (also `<`, `>`, `<=`, `>=`) |
+| `[Field==value]`  | Filter: keep only elements where `Field` is a number equal to `value`, or a bool equal to `true`/`false` (also `<`, `>`, `<=`, `>=` for numbers) |
 | `..Name` | Recursive descent: find all nodes named `Name` at any depth |
 | `..[Filter]` | Wildcard recursive descent: traverse all depths, keep nodes matching `Filter` |
 | `A,B,C` | Field projection: returns an anonymous struct containing only the requested fields |
@@ -70,6 +70,16 @@ An empty path (`""`) resolves to the root value itself.
 ## Filter syntax
 
 Filters appear inside `[…]` and narrow a slice, array, or map to only the elements that match.
+
+### Quoting patterns
+
+If a filter pattern contains any of the filter operator characters (`!`, `=`, `~`, `<`, `>`), you should enclose the pattern in double quotes `"` to ensure it is parsed correctly. Inner quotes can be escaped with `\"`.
+
+```go
+query.All(root, `Orders[Formula="a<b"]`)           // pattern contains <
+query.All(root, `Orders[Status="done!"]`)          // pattern contains !
+query.All(root, `Orders[Name="say \"hi\""]`)       // escaped quotes
+```
 
 ### Existence filter `[Field!]`
 
@@ -135,6 +145,29 @@ query.All(root, "Resources[Tags~prod*]")
 // Require at least one non-empty tag
 query.All(root, "Resources[Tags~?*]")
 ```
+
+### Numeric and bool comparison filter `[Field==value]`
+
+Keeps elements where `Field` is a number or bool matching `value`. The `==`, `<`, `>`, `<=`, and `>=` operators are supported for numeric fields (`IntValue`, `UintValue`, `FloatValue`). Only `==` is supported for `BoolValue` fields.
+
+| Pattern | Matches |
+|---|---|
+| `[Count==5]` | `Count` is exactly 5 |
+| `[Price<100]` | `Price` is less than 100 |
+| `[Price>=0]` | `Price` is zero or positive |
+| `[Enabled==true]` | `Enabled` is `true` |
+| `[Enabled==false]` | `Enabled` is `false` |
+
+Bool literals are case-insensitive: `true`, `True`, `TRUE` all match `BoolValue{true}`. Any other word (e.g. `banana`) is a **parse-time error** — `Parse` returns a `*ParseError` and `All`/`Get`/`MustGet` panic.
+
+```go
+query.All(root, "Items[Count==5]")
+query.All(root, "Items[Price<100]")
+query.All(root, "Flags[Enabled==true]")   // bool field — exact match
+query.All(root, "Flags[Enabled==TRUE]")   // case-insensitive — same result
+```
+
+> **Note:** Ordering operators (`<`, `>`, `<=`, `>=`) only work on numeric types. Applying them to a `BoolValue` field always returns no match.
 
 ## Recursive descent
 

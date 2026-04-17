@@ -4,7 +4,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -23,10 +25,27 @@ const (
 )
 
 // RedactConfig controls value redaction by field or map key name.
+//
+// When TextLength is 0 (the default), the number of fill characters emitted
+// depends on the rendered form of the value being redacted:
+//   - Single-line values: emit len([]rune(rendered)) fill chars, preserving
+//     the visual width of the original text.
+//   - Multi-line values (e.g. nested structs): emit exactly 3 fill chars ("***").
+//     Counting runes across a multi-line rendering is not meaningful — the rune
+//     total includes indentation, newlines, and braces rather than content length —
+//     and inserting a flat string where a multi-line value was breaks visual
+//     alignment regardless. A short placeholder is unambiguous and clean.
+//
+// Set TextLength > 0 to always emit exactly that many fill chars, regardless of
+// the original rendered length or whether it is single- or multi-line.
+//
+// Note: Char is repeated by Unicode code point, not by terminal display width.
+// Multi-byte fill characters (e.g. '█') produce the requested number of code
+// points; terminal column width may differ.
 type RedactConfig struct {
 	Keys       []string // exact field/key names that trigger redaction
 	Char       rune     // fill character; defaults to '*'
-	TextLength int      // number of Char runes to emit; 0 = preserve original length
+	TextLength int      // number of Char runes to emit; 0 = see type-level doc
 }
 
 // RedactTypesConfig controls value redaction by type name.
@@ -93,8 +112,11 @@ func WithBytesFormat(f BytesFormat) FormatOption {
 }
 
 // redact replaces original with a fill character string. If char is zero, '*'
-// is used. If textLength > 0, exactly that many characters are emitted;
-// otherwise the number of Unicode code points in original is used.
+// is used. If textLength > 0, exactly that many characters are emitted.
+// When textLength is 0:
+//   - Single-line originals: emit len([]rune(original)) fill chars.
+//   - Multi-line originals (contain '\n'): emit 3 fill chars ("***").
+//     See [RedactConfig] for the rationale.
 func redact(original string, char rune, textLength int) string {
 	ch := char
 	if ch == 0 {
@@ -102,7 +124,11 @@ func redact(original string, char rune, textLength int) string {
 	}
 	n := textLength
 	if n == 0 {
-		n = len([]rune(original))
+		if strings.ContainsRune(original, '\n') {
+			n = 3
+		} else {
+			n = len([]rune(original))
+		}
 	}
 	return strings.Repeat(string(ch), n)
 }
@@ -167,12 +193,19 @@ func fmtValue(v Value, cfg *formatConfig, depth int) string {
 	case UintValue:
 		return fmt.Sprintf("%d", v.V)
 	case FloatValue:
-		return fmt.Sprintf("%g", v.V)
-	case ComplexValue:
-		if v.Imag >= 0 {
-			return fmt.Sprintf("(%g+%gi)", v.Real, v.Imag)
+		s := strconv.FormatFloat(v.V, 'g', -1, 64)
+		// Ensure integer-valued floats are distinguishable from IntValue:
+		// if the output contains no '.', 'e', or 'E' it looks like a bare
+		// integer, so append ".0". NaN and Inf are never bare integers.
+		if !strings.ContainsAny(s, ".eE") {
+			s += ".0"
 		}
-		return fmt.Sprintf("(%g%gi)", v.Real, v.Imag)
+		return s
+	case ComplexValue:
+		if math.Signbit(v.Imag) {
+			return fmt.Sprintf("(%g%gi)", v.Real, v.Imag)
+		}
+		return fmt.Sprintf("(%g+%gi)", v.Real, v.Imag)
 	case StringValue:
 		return fmt.Sprintf("%q", v.V)
 	case BytesValue:
@@ -201,7 +234,12 @@ func fmtValue(v Value, cfg *formatConfig, depth int) string {
 // requested format is used.
 func fmtBytes(b []byte, cfg *formatConfig) string {
 	if !cfg.bytesFormatExplicit && isPrintableUTF8(b) {
-		return fmt.Sprintf("%q", b)
+		truncated, ellipsis := truncateBytes(b, cfg.maxBytes)
+		s := fmt.Sprintf("%q", truncated)
+		if ellipsis {
+			s += "…"
+		}
+		return s
 	}
 	return fmtBytesWithFormat(b, cfg)
 }
@@ -209,6 +247,9 @@ func fmtBytes(b []byte, cfg *formatConfig) string {
 // fmtBytesWithFormat encodes b using the BytesFormat in cfg, without the
 // printable-UTF-8 shortcut. Used directly for OpaqueValue.Raw rendering.
 func fmtBytesWithFormat(b []byte, cfg *formatConfig) string {
+	if len(b) == 0 {
+		return "[]"
+	}
 	switch cfg.bytesFormat {
 	case BytesBase64:
 		truncated, ellipsis := truncateBytes(b, cfg.maxBytes)
@@ -243,8 +284,8 @@ func truncateBytes(b []byte, maxBytes int) ([]byte, bool) {
 }
 
 // isPrintableUTF8 reports whether b is valid UTF-8 where every rune is
-// printable. Empty slices return false so they render as empty hex rather than
-// the ambiguous "".
+// printable. Empty slices return false so they render unambiguously as "[]"
+// rather than the ambiguous "".
 func isPrintableUTF8(b []byte) bool {
 	if len(b) == 0 {
 		return false
@@ -350,19 +391,27 @@ func fmtMap(v MapValue, cfg *formatConfig, depth int) string {
 		return header + "{}"
 	}
 
-	// Sort entries by formatted key for deterministic output.
-	entries := make([]MapEntry, len(v.Entries))
-	copy(entries, v.Entries)
-	sort.Slice(entries, func(i, j int) bool {
-		return fmtValue(entries[i].Key, cfg, 0) < fmtValue(entries[j].Key, cfg, 0)
+	// Precompute the canonical (depth-0) key string for each entry once.
+	// This avoids re-rendering every key on each comparison during sorting,
+	// reducing O(n log n) renders to O(n).
+	type keyedEntry struct {
+		canonKey string
+		entry    MapEntry
+	}
+	keyed := make([]keyedEntry, len(v.Entries))
+	for i, e := range v.Entries {
+		keyed[i] = keyedEntry{canonKey: fmtValue(e.Key, cfg, 0), entry: e}
+	}
+	sort.Slice(keyed, func(i, j int) bool {
+		return keyed[i].canonKey < keyed[j].canonKey
 	})
 
 	// Attempt inline rendering: fail if any element is itself multi-line.
-	parts := make([]string, 0, len(entries))
+	parts := make([]string, 0, len(keyed))
 	canInline := true
-	for _, e := range entries {
-		k := fmtValue(e.Key, cfg, 0)
-		vv := fmtValue(e.Value, cfg, 0)
+	for _, ke := range keyed {
+		k := ke.canonKey
+		vv := fmtValue(ke.entry.Value, cfg, 0)
 		if cfg.redactKeys != nil && containsString(cfg.redactKeys.Keys, k) {
 			vv = redactWithKeyCfg(vv, *cfg.redactKeys)
 		}
@@ -385,14 +434,15 @@ func fmtMap(v MapValue, cfg *formatConfig, depth int) string {
 	var sb strings.Builder
 	sb.WriteString(header)
 	sb.WriteString("{\n")
-	for _, e := range entries {
+	for _, ke := range keyed {
 		sb.WriteString(fieldIndent)
-		fmtKey := fmtValue(e.Key, cfg, depth+1)
-		canonKey := fmtValue(e.Key, cfg, 0) // canonical (depth-0) form for redact matching
-		sb.WriteString(fmtKey)
+		// Render the display key at depth+1 for correct indentation of any
+		// nested struct/map keys; use the precomputed depth-0 canon key only
+		// for redact matching.
+		sb.WriteString(fmtValue(ke.entry.Key, cfg, depth+1))
 		sb.WriteString(": ")
-		rendered := fmtValue(e.Value, cfg, depth+1)
-		if cfg.redactKeys != nil && containsString(cfg.redactKeys.Keys, canonKey) {
+		rendered := fmtValue(ke.entry.Value, cfg, depth+1)
+		if cfg.redactKeys != nil && containsString(cfg.redactKeys.Keys, ke.canonKey) {
 			rendered = redactWithKeyCfg(rendered, *cfg.redactKeys)
 		}
 		sb.WriteString(rendered)

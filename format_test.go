@@ -2,6 +2,8 @@ package gobspect_test
 
 import (
 	"encoding/gob"
+	"fmt"
+	"math"
 	"math/big"
 	"os"
 	"testing"
@@ -173,10 +175,34 @@ func TestFormat_WithMaxBytes(t *testing.T) {
 	assert.Equal(t, "WrapBytes{\n  V: 010203…\n}", got)
 }
 
+func TestFormat_WithMaxBytes_PrintableUTF8(t *testing.T) {
+	// Create a 1 MiB valid printable UTF-8 byte slice
+	large := make([]byte, 1024*1024)
+	for i := range large {
+		large[i] = 'A' // 'A' is printable UTF-8
+	}
+	
+	got := formatFirst(t, WrapBytes{V: large}, gobspect.WithMaxBytes(64))
+	
+	// Right now the length is likely > 1MiB because it's untruncated.
+	// The assertion should cap checking length instead of dumping a huge string.
+	assert.Less(t, len(got), 1024, "Output should be bounded and not render the entire 1 MiB slice")
+	assert.Contains(t, got, "…")
+}
+
 func TestFormat_BytesNonPrintable(t *testing.T) {
 	got := formatFirst(t, WrapBytes{V: []byte{0xDE, 0xAD, 0xBE, 0xEF}})
 	assert.Equal(t, "WrapBytes{\n  V: deadbeef\n}", got)
 }
+
+func TestFormat_EmptyBytes(t *testing.T) {
+	nilGot := gobspect.Format(gobspect.BytesValue{V: nil})
+	emptyGot := gobspect.Format(gobspect.BytesValue{V: []byte{}})
+	
+	assert.Equal(t, "[]", nilGot)
+	assert.Equal(t, "[]", emptyGot)
+}
+
 
 func TestFormat_EmptyStruct(t *testing.T) {
 	// Point{} has zero-valued fields; gob omits them, so Fields is empty.
@@ -260,6 +286,64 @@ func TestFormat_WithRedactKeys_MapEntry(t *testing.T) {
 		gobspect.WithRedactKeys(gobspect.RedactConfig{Keys: []string{`"password"`}}))
 	assert.NotContains(t, got, "s3cr3t")
 	assert.Contains(t, got, "alice")
+}
+
+// redactNestedInner / redactNestedOuter exercise key redaction when the redacted
+// field's rendered form is multi-line (i.e. contains newlines and indentation).
+type redactNestedInner struct {
+	Secret string
+	Extra  string
+}
+
+type redactNestedOuter struct {
+	Public string
+	Inner  redactNestedInner
+}
+
+// TestFormat_WithRedactKeys_NestedStructMultiLine documents and tests the
+// behaviour when a redacted field renders as a multi-line struct.
+//
+// Decision: when TextLength == 0 and the rendered value is multi-line, redact
+// emits a short fixed placeholder ("***", 3 chars) rather than counting the
+// rune length of the full indented rendering (which includes newlines,
+// indentation, and braces — none of which reflect meaningful value length).
+// Setting TextLength > 0 always overrides this and emits exactly that many
+// fill characters.
+func TestFormat_WithRedactKeys_NestedStructMultiLine(t *testing.T) {
+	v := redactNestedOuter{
+		Public: "visible",
+		Inner:  redactNestedInner{Secret: "topsecret", Extra: "alsoSecret"},
+	}
+
+	t.Run("length_preserving_multiline_uses_short_placeholder", func(t *testing.T) {
+		// TextLength == 0: multi-line rendered value must NOT produce a
+		// long flat run of asterisks. Expect exactly "***".
+		got := formatFirst(t, v,
+			gobspect.WithRedactKeys(gobspect.RedactConfig{Keys: []string{"Inner"}}))
+		assert.Equal(t, "redactNestedOuter{\n  Public: \"visible\"\n  Inner: ***\n}", got)
+		assert.NotContains(t, got, "topsecret")
+		assert.NotContains(t, got, "alsoSecret")
+		// Must not produce a long run of asterisks (old buggy behaviour was 71+).
+		assert.NotContains(t, got, "****")
+	})
+
+	t.Run("explicit_text_length_respected_even_when_multiline", func(t *testing.T) {
+		// TextLength > 0 always wins regardless of multi-line.
+		got := formatFirst(t, v,
+			gobspect.WithRedactKeys(gobspect.RedactConfig{Keys: []string{"Inner"}, TextLength: 5}))
+		assert.Contains(t, got, "Inner: *****")
+		assert.NotContains(t, got, "topsecret")
+	})
+
+	t.Run("single_line_field_still_length_preserving", func(t *testing.T) {
+		// Non-nested (single-line) fields continue to preserve rendered length.
+		// "topsecret" renders as `"topsecret"` (11 chars) → 11 stars.
+		v2 := redactNestedOuter{Public: "visible", Inner: redactNestedInner{Secret: "topsecret"}}
+		got := formatFirst(t, v2,
+			gobspect.WithRedactKeys(gobspect.RedactConfig{Keys: []string{"Secret"}, Char: '*'}))
+		assert.Contains(t, got, `Secret: ***********`)
+		assert.NotContains(t, got, "topsecret")
+	})
 }
 
 // — WithRedactTypes tests ——————————————————————————————————————————————————————
@@ -540,6 +624,14 @@ func TestFormat_ComplexNegativeImag(t *testing.T) {
 	assert.Equal(t, "WrapComplex{\n  V: (3-4i)\n}", got)
 }
 
+// TestFormat_ComplexNegativeZeroImag verifies that a ComplexValue with a
+// negative-zero imaginary part renders as "(real-0i)" — not "(real+-0i)".
+func TestFormat_ComplexNegativeZeroImag(t *testing.T) {
+	got := formatFirst(t, WrapComplex{V: complex(1, math.Copysign(0, -1))})
+	assert.NotContains(t, got, "+-", "negative-zero imag must not produce '+-'")
+	assert.Equal(t, "WrapComplex{\n  V: (1-0i)\n}", got)
+}
+
 // TestFormat_NilValueDirect verifies that a NilValue passed directly to Format
 // renders as "nil".
 func TestFormat_NilValueDirect(t *testing.T) {
@@ -816,4 +908,166 @@ func TestFormatSchema_UnknownElemRefWithName(t *testing.T) {
 	}
 	got := gobspect.FormatSchema([]gobspect.TypeInfo{holder}).String()
 	assert.Contains(t, got, "type NamedHolder []ExternalType")
+}
+
+// TestFormatSchema_GenericTypeNotDropped verifies that a user-defined named type
+// whose reflect name contains brackets due to a generic instantiation (e.g.
+// "Pair[int,string]") is NOT excluded from the schema output. The old filter
+// used strings.ContainsAny(name, "[]* ") which incorrectly dropped such names.
+func TestFormatSchema_GenericTypeNotDropped(t *testing.T) {
+	tests := []struct {
+		name     string
+		typeName string
+	}{
+		{"generic_struct", "Pair[int,string]"},
+		{"generic_with_package", "main.Wrapper[int]"},
+		{"generic_multiple_params", "Result[string,error]"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ti := gobspect.TypeInfo{
+				ID:   100,
+				Name: tt.typeName,
+				Kind: gobspect.KindStruct,
+				Fields: []gobspect.FieldInfo{
+					{Name: "Value", TypeID: 5}, // string builtin
+				},
+			}
+			got := gobspect.FormatSchema([]gobspect.TypeInfo{ti}).String()
+			assert.Contains(t, got, tt.typeName,
+				"generic type %q should appear in schema output", tt.typeName)
+		})
+	}
+}
+
+// TestFormatSchema_MechanicalNamesStillDropped verifies that mechanically-generated
+// anonymous type names ([]T, [N]T, map[K]V, *T) are still excluded from the
+// top-level schema even after the generic-name fix.
+func TestFormatSchema_MechanicalNamesStillDropped(t *testing.T) {
+	tests := []struct {
+		name     string
+		typeName string
+	}{
+		{"slice", "[]int"},
+		{"named_slice", "[]main.Item"},
+		{"array", "[4]int"},
+		{"map", "map[string]int"},
+		{"map_named_val", "map[string]main.Item"},
+		{"pointer", "*main.Thing"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ti := gobspect.TypeInfo{
+				ID:   200,
+				Name: tt.typeName,
+				Kind: gobspect.KindStruct,
+			}
+			got := gobspect.FormatSchema([]gobspect.TypeInfo{ti}).String()
+			assert.NotContains(t, got, tt.typeName,
+				"mechanical type name %q should be excluded from schema output", tt.typeName)
+		})
+	}
+}
+
+// — FloatValue formatting ——————————————————————————————————————————————————————
+
+// TestFormat_FloatValue verifies that FloatValue renders with full precision and
+// in a form that is always distinguishable from an IntValue.
+func TestFormat_FloatValue(t *testing.T) {
+	tests := []struct {
+		name string
+		v    float64
+		// wantContains is a substring that must appear in the output (used for
+		// special values whose exact rendering may be platform-dependent).
+		wantContains string
+		// wantExact, when non-empty, is the exact expected string.
+		wantExact string
+		// notInt asserts the output does NOT look like a bare integer.
+		notInt bool
+	}{
+		{
+			name:      "integer_valued_float",
+			v:         1.0,
+			wantExact: "1.0",
+			notInt:    true,
+		},
+		{
+			name:      "pi_full_precision",
+			v:         math.Pi,
+			wantExact: "3.141592653589793",
+			notInt:    true,
+		},
+		{
+			name:      "small_exponent",
+			v:         1e-20,
+			wantExact: "1e-20",
+			notInt:    true,
+		},
+		{
+			name:         "nan",
+			v:            math.NaN(),
+			wantContains: "NaN",
+		},
+		{
+			name:         "positive_inf",
+			v:            math.Inf(1),
+			wantContains: "Inf",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := gobspect.Format(gobspect.FloatValue{V: tt.v})
+			if tt.wantExact != "" {
+				assert.Equal(t, tt.wantExact, got)
+			}
+			if tt.wantContains != "" {
+				assert.Contains(t, got, tt.wantContains)
+			}
+			if tt.notInt {
+				// Must not be indistinguishable from an integer: must contain
+				// '.', 'e', 'E', 'N' (NaN), or 'I' (Inf).
+				hasFloat := false
+				for _, ch := range got {
+					if ch == '.' || ch == 'e' || ch == 'E' || ch == 'N' || ch == 'I' {
+						hasFloat = true
+						break
+					}
+				}
+				assert.True(t, hasFloat, "float output %q is indistinguishable from an integer", got)
+			}
+		})
+	}
+}
+
+// BenchmarkFmtMapLargeStructKeys measures the cost of formatting a MapValue
+// with 10 000 struct-valued keys. Before the precomputed-key optimisation the
+// sort comparator called fmtValue on every comparison, rendering each key
+// O(n log n) times instead of once.
+func BenchmarkFmtMapLargeStructKeys(b *testing.B) {
+	const n = 10_000
+	entries := make([]gobspect.MapEntry, n)
+	for i := range n {
+		entries[i] = gobspect.MapEntry{
+			Key: gobspect.StructValue{
+				TypeName: "Key",
+				Fields: []gobspect.Field{
+					{Name: "A", Value: gobspect.IntValue{V: int64(i)}},
+					{Name: "B", Value: gobspect.StringValue{V: fmt.Sprintf("k%d", i)}},
+				},
+			},
+			Value: gobspect.StringValue{V: fmt.Sprintf("v%d", i)},
+		}
+	}
+	mv := gobspect.MapValue{
+		KeyType:  "Key",
+		ElemType: "string",
+		Entries:  entries,
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		_ = gobspect.Format(mv)
+	}
 }

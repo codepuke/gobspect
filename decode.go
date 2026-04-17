@@ -21,7 +21,12 @@ func (cr *countingReader) ReadByte() (byte, error) {
 	if err == nil {
 		cr.n++
 		if cr.n > cr.limit {
-			return 0, fmt.Errorf("gob: stream exceeds MaxBytes limit of %d", cr.limit)
+			// Return the byte alongside the error, consistent with Read which
+			// returns n > 0 alongside the limit error.  All callers in the
+			// decode path (decodeUint and friends) check err before using b,
+			// so neither behaviour causes correctness problems — but returning
+			// b makes the contract uniform.
+			return b, fmt.Errorf("gob: stream exceeds MaxBytes limit of %d", cr.limit)
 		}
 	}
 	return b, err
@@ -390,7 +395,11 @@ func iterate(sd *streamDecoder, vd *valueDecoder) iter.Seq2[Value, error] {
 func (ins *Inspector) Values(r io.Reader) iter.Seq2[Value, error] {
 	sd := newStreamDecoder(wrapWithLimit(r, ins.options.MaxBytes))
 	vd := newValueDecoder(ins, sd)
-	return iterate(sd, vd)
+	seq := iterate(sd, vd)
+	return func(yield func(Value, error) bool) {
+		seq(yield)
+		sd.resolveAllRefs()
+	}
 }
 
 // DecodeTypes reads the gob stream from r and returns TypeInfo for every type

@@ -51,7 +51,12 @@ func parseTimeBytes(data []byte) (unixSec int64, nsec int32, offsetSec int, err 
 		offSec = int(offsetMin) * 60
 	}
 	if version == 2 {
-		offSec += int(int8(data[15]))
+		// stdlib UnmarshalBinary reads byte 15 as an unsigned byte (int(buf[2])),
+		// not as int8. For negative sub-minute LMT offsets the encoder stores a
+		// negative int8 value (e.g. -2 → 0xFE), but stdlib decodes it as the
+		// positive value 254. We match that behaviour so that the reconstructed
+		// zone offset is identical to what stdlib would return for the same blob.
+		offSec += int(data[15])
 	}
 
 	// Convert from internal epoch (year 1) to Unix epoch (year 1970).
@@ -290,6 +295,10 @@ func decodeShopspringDecimal(data []byte) (any, error) {
 		return nil, fmt.Errorf("decimal.Decimal: %w", err)
 	}
 	s := v.(string)
+
+	if s == "0" {
+		return "0", nil
+	}
 
 	if exp >= 0 {
 		return s + strings.Repeat("0", int(exp)), nil
