@@ -599,10 +599,20 @@ func needsQuoting(p string) bool {
 	if len(p) > 0 && p[len(p)-1] == '!' {
 		return true
 	}
-	return strings.ContainsAny(p, `]"\`)
+	for i := 0; i < len(p); i++ {
+		switch p[i] {
+		case ']', '"', '\\':
+			return true
+		}
+		// Control characters (newline, tab, CR, etc.) must be escaped.
+		if p[i] < 0x20 {
+			return true
+		}
+	}
+	return false
 }
 
-// quotePattern emits the pattern in quoted form with " and \ escaped.
+// quotePattern emits the pattern in quoted form with special characters escaped.
 func quotePattern(p string) string {
 	var b strings.Builder
 	b.WriteByte('"')
@@ -612,6 +622,12 @@ func quotePattern(p string) string {
 			b.WriteString(`\"`)
 		case '\\':
 			b.WriteString(`\\`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\r':
+			b.WriteString(`\r`)
 		default:
 			b.WriteByte(p[i])
 		}
