@@ -97,7 +97,7 @@ func TestKeysPathMapNonStringKeys(t *testing.T) {
 	assert.Equal(t, []string{"two"}, keys)
 }
 
-// TestKeysPathMapAllNonStringKeys verifies a map with no string keys returns empty slice.
+// TestKeysPathMapAllNonStringKeys verifies a map with no string keys returns (nil, false).
 func TestKeysPathMapAllNonStringKeys(t *testing.T) {
 	m := makeMap(
 		entry(makeInt(1), makeString("one")),
@@ -105,8 +105,8 @@ func TestKeysPathMapAllNonStringKeys(t *testing.T) {
 	)
 
 	keys, ok := Keys(m, "")
-	require.True(t, ok)
-	assert.Equal(t, []string{}, keys)
+	assert.False(t, ok)
+	assert.Nil(t, keys)
 }
 
 // TestKeysPathEmptyMap verifies an empty map returns an empty slice.
