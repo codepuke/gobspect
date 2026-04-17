@@ -20,17 +20,20 @@ func SchemaAt(schema *gobspect.Schema, rootTypeExpr string, p Path) (string, err
 		case segField:
 			decl, ok := schema.TypeByName(currentExpr)
 			if !ok {
-				// Try unnamed map.
+				// Try unnamed map or slice/array.
 				if strings.HasPrefix(currentExpr, "map[") {
 					valType, keyType, err := mapValueAndKeyType(currentExpr)
 					if err != nil {
 						return "", fmt.Errorf("schema lookup: malformed map type %q: %v", currentExpr, err)
 					}
 					if keyType != "string" {
-						return "", fmt.Errorf("schema lookup: field %q cannot navigate map with key type %q (only map[string]T is field-navigable)", seg.name, keyType)
+						return "", fmt.Errorf("schema lookup: cannot navigate field %q on map with non-string keys", seg.name)
 					}
 					currentExpr = valType
 					break
+				}
+				if strings.HasPrefix(currentExpr, "[") {
+					return "", fmt.Errorf("schema lookup: cannot navigate field %q on slice/array type %q — use an index or wildcard first", seg.name, currentExpr)
 				}
 				return "", fmt.Errorf("schema lookup: type %q not found or not a struct/map", currentExpr)
 			}
@@ -42,10 +45,14 @@ func SchemaAt(schema *gobspect.Schema, rootTypeExpr string, p Path) (string, err
 					return "", fmt.Errorf("schema lookup: malformed map type %q: %v", decl.TargetType, err)
 				}
 				if keyType != "string" {
-					return "", fmt.Errorf("schema lookup: field %q cannot navigate map with key type %q (only map[string]T is field-navigable)", seg.name, keyType)
+					return "", fmt.Errorf("schema lookup: cannot navigate field %q on map with non-string keys", seg.name)
 				}
 				currentExpr = valType
 				break
+			}
+
+			if decl.Kind == gobspect.KindSlice || decl.Kind == gobspect.KindArray {
+				return "", fmt.Errorf("schema lookup: cannot navigate field %q on slice/array type %q — use an index or wildcard first", seg.name, currentExpr)
 			}
 
 			if decl.Kind != gobspect.KindStruct {

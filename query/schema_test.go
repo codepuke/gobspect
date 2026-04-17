@@ -48,6 +48,7 @@ func TestSchemaAt(t *testing.T) {
 		{"ID.0", "", true},       // cannot index int
 		{"..Items", "", true},    // descent not supported statically
 		{"SKU,Price", "struct", false}, // projection returns anonymous struct
+		{"Items.Price", "", true},      // cannot navigate field on slice
 	}
 
 	for _, tt := range tests {
@@ -148,7 +149,13 @@ func TestSchemaAt_NonStringMapKeyRejectsField(t *testing.T) {
 				Kind: gobspect.KindStruct,
 				Fields: []gobspect.FieldDecl{
 					{Name: "Data", Type: "map[int]string"},
+					{Name: "Items", Type: "[]int"},
 				},
+			},
+			{
+				Name: "NamedSlice",
+				Kind: gobspect.KindSlice,
+				TargetType: "[]int",
 			},
 		},
 	}
@@ -163,13 +170,25 @@ func TestSchemaAt_NonStringMapKeyRejectsField(t *testing.T) {
 			name:     "named_map_int_key",
 			rootType: "IntMap",
 			expr:     "xyz",
-			wantErr:  "only map[string]T is field-navigable",
+			wantErr:  "cannot navigate field",
 		},
 		{
 			name:     "inline_map_int_key",
 			rootType: "Wrapper",
 			expr:     "Data.xyz",
-			wantErr:  "only map[string]T is field-navigable",
+			wantErr:  "cannot navigate field",
+		},
+		{
+			name:     "unnamed_slice_field",
+			rootType: "Wrapper",
+			expr:     "Items.Price",
+			wantErr:  "use an index or wildcard first",
+		},
+		{
+			name:     "named_slice_field",
+			rootType: "NamedSlice",
+			expr:     "SomeField",
+			wantErr:  "use an index or wildcard first",
 		},
 	}
 
@@ -259,6 +278,6 @@ func TestSchemaAt_MapProjection(t *testing.T) {
 		require.NoError(t, err)
 		_, err = query.SchemaAt(schema, "IntKeyMap", p)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "only map[string]T is field-navigable")
+		assert.Contains(t, err.Error(), "cannot navigate field")
 	})
 }
