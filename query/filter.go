@@ -111,7 +111,7 @@ func matchesFilter(v gobspect.Value, seg segment) bool {
 		if !seg.filterNumOK {
 			return false
 		}
-		return numericCmp(fv, seg.filterOp, seg.filterNumVal)
+		return numericCmp(fv, seg.filterOp, seg)
 	}
 
 	// filterOpGlob
@@ -123,9 +123,26 @@ func matchesFilter(v gobspect.Value, seg segment) bool {
 	return err == nil && matched
 }
 
-// numericCmp converts v to float64 and compares it against target using op.
+// numericCmp compares v against the numeric target in seg using op.
+// It uses high-precision integer comparison if both v and the pattern
+// are pure integers (e.g., [ID==123] vs IntValue), which avoids the
+// precision loss that occurs when casting large integers to float64
+// (which has only 53 bits of mantissa). For FloatValue or patterns
+// containing decimal points/exponents, it falls back to float64 comparison.
 // Returns false if v is not a numeric type.
-func numericCmp(v gobspect.Value, op filterOp, target float64) bool {
+func numericCmp(v gobspect.Value, op filterOp, seg segment) bool {
+	switch n := v.(type) {
+	case gobspect.IntValue:
+		if seg.filterIntOK {
+			return intCmp(n.V, op, seg.filterIntVal)
+		}
+	case gobspect.UintValue:
+		if seg.filterUintOK {
+			return uintCmp(n.V, op, seg.filterUintVal)
+		}
+	}
+
+	// Fallback to float64 comparison (precision loss for large integers).
 	var fv float64
 	switch n := v.(type) {
 	case gobspect.IntValue:
@@ -137,6 +154,7 @@ func numericCmp(v gobspect.Value, op filterOp, target float64) bool {
 	default:
 		return false
 	}
+	target := seg.filterNumVal
 	switch op {
 	case filterOpNumEq:
 		return fv == target
@@ -148,6 +166,38 @@ func numericCmp(v gobspect.Value, op filterOp, target float64) bool {
 		return fv <= target
 	case filterOpNumGTE:
 		return fv >= target
+	}
+	return false
+}
+
+func intCmp(a int64, op filterOp, b int64) bool {
+	switch op {
+	case filterOpNumEq:
+		return a == b
+	case filterOpNumLT:
+		return a < b
+	case filterOpNumGT:
+		return a > b
+	case filterOpNumLTE:
+		return a <= b
+	case filterOpNumGTE:
+		return a >= b
+	}
+	return false
+}
+
+func uintCmp(a uint64, op filterOp, b uint64) bool {
+	switch op {
+	case filterOpNumEq:
+		return a == b
+	case filterOpNumLT:
+		return a < b
+	case filterOpNumGT:
+		return a > b
+	case filterOpNumLTE:
+		return a <= b
+	case filterOpNumGTE:
+		return a >= b
 	}
 	return false
 }

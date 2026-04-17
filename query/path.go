@@ -44,6 +44,10 @@ type segment struct {
 	filterPattern string    // segFilter [Field=pattern] or [Field~pattern] form
 	filterNumVal  float64   // parsed numeric value for numeric comparison ops
 	filterNumOK   bool      // true if filterNumVal was successfully parsed
+	filterIntVal  int64     // parsed int64 value for high-precision comparison
+	filterIntOK   bool      // true if filterIntVal was successfully parsed
+	filterUintVal uint64    // parsed uint64 value for high-precision comparison
+	filterUintOK  bool      // true if filterUintVal was successfully parsed
 	filterBoolVal bool      // parsed bool value for == comparisons on bool fields
 	filterBoolOK  bool      // true if filterBoolVal was successfully parsed
 	orAlts        []segment // non-nil = OR group; holds 2+ segFilter alternatives
@@ -205,6 +209,10 @@ func parseSegments(expr string) ([]segment, error) {
 					last.filterPattern = ""
 					last.filterNumVal = 0
 					last.filterNumOK = false
+					last.filterIntVal = 0
+					last.filterIntOK = false
+					last.filterUintVal = 0
+					last.filterUintOK = false
 				} else {
 					last.orAlts = append(last.orAlts, nextSeg)
 				}
@@ -441,6 +449,19 @@ func parseFilter(expr string, start int) (segment, int, error) {
 			if err == nil {
 				seg.filterNumVal = val
 				seg.filterNumOK = true
+
+				// Also try parsing as int64 and uint64 for high-precision integer comparisons.
+				// We only do this if the pattern is a pure integer literal (no '.' or 'e').
+				if !strings.ContainsAny(pattern, ".eE") {
+					if iv, err := strconv.ParseInt(pattern, 10, 64); err == nil {
+						seg.filterIntVal = iv
+						seg.filterIntOK = true
+					}
+					if uv, err := strconv.ParseUint(pattern, 10, 64); err == nil {
+						seg.filterUintVal = uv
+						seg.filterUintOK = true
+					}
+				}
 			} else {
 				// Accept bool literals (case-insensitive); reject everything else at parse time.
 				switch strings.ToLower(pattern) {
