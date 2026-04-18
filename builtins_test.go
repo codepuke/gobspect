@@ -29,7 +29,7 @@ func gobEncodeVal(tb testing.TB, v any) *bytes.Buffer {
 func decodeOpaque(tb testing.TB, buf *bytes.Buffer) OpaqueValue {
 	tb.Helper()
 	ins := New()
-	vals, err := ins.Decode(buf)
+	vals, err := ins.Stream(buf).Collect()
 	require.NoError(tb, err)
 	require.Len(tb, vals, 1)
 	ov, ok := vals[0].(OpaqueValue)
@@ -409,7 +409,7 @@ func TestRoundTrip_UUID(t *testing.T) {
 	buf := gobEncodeVal(t, id) // encode value, not pointer
 	ins := New()
 	ins.RegisterDecoder("fakeUUID", decodeUUID)
-	vals, err := ins.Decode(buf)
+	vals, err := ins.Stream(buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 1)
 	ov, ok := vals[0].(OpaqueValue)
@@ -430,7 +430,7 @@ func TestRoundTrip_BigFloat_DirectEncoding_NoSilentWrongOutput(t *testing.T) {
 	f := big.NewFloat(3.14)
 	buf := gobEncodeVal(t, f)
 	ins := New()
-	vals, err := ins.Decode(buf)
+	vals, err := ins.Stream(buf).Collect()
 	require.NoError(t, err, "decoding big.Float directly must not return a stream error")
 	require.Len(t, vals, 1)
 	ov, ok := vals[0].(OpaqueValue)
@@ -455,7 +455,7 @@ func TestRoundTrip_BigFloat_NegativeDirectEncoding_NoSilentWrongOutput(t *testin
 	f := big.NewFloat(-1.5)
 	buf := gobEncodeVal(t, f)
 	ins := New()
-	vals, err := ins.Decode(buf)
+	vals, err := ins.Stream(buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 1)
 	ov, ok := vals[0].(OpaqueValue)
@@ -486,7 +486,7 @@ func TestRoundTrip_BigFloat_ViaInterface_HasNonEmptyTypeName(t *testing.T) {
 	buf := gobEncodeVal(t, w)
 
 	ins := New()
-	vals, err := ins.Decode(buf)
+	vals, err := ins.Stream(buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 1)
 
@@ -591,7 +591,7 @@ func TestWithTimeFormat_DateOnly(t *testing.T) {
 	ts := time.Date(2024, 6, 15, 14, 30, 0, 0, time.UTC)
 	ins := New(WithTimeFormat("2006-01-02"))
 	buf := gobEncodeVal(t, ts)
-	vals, err := ins.Decode(buf)
+	vals, err := ins.Stream(buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 1)
 	ov, ok := vals[0].(OpaqueValue)
@@ -603,7 +603,7 @@ func TestWithTimeFormat_CustomLayout(t *testing.T) {
 	ts := time.Date(2024, 12, 31, 23, 59, 59, 0, time.UTC)
 	ins := New(WithTimeFormat("02 Jan 2006"))
 	buf := gobEncodeVal(t, ts)
-	vals, err := ins.Decode(buf)
+	vals, err := ins.Stream(buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 1)
 	ov := vals[0].(OpaqueValue)
@@ -619,9 +619,9 @@ func TestWithTimeFormat_DefaultMatchesRFC3339Nano(t *testing.T) {
 	buf1 := gobEncodeVal(t, ts)
 	buf2 := gobEncodeVal(t, ts)
 
-	vals1, err := insDefault.Decode(buf1)
+	vals1, err := insDefault.Stream(buf1).Collect()
 	require.NoError(t, err)
-	vals2, err := insCustom.Decode(buf2)
+	vals2, err := insCustom.Stream(buf2).Collect()
 	require.NoError(t, err)
 
 	assert.Equal(t, vals1[0].(OpaqueValue).Decoded, vals2[0].(OpaqueValue).Decoded)
@@ -632,8 +632,11 @@ func TestWithTimeFormat_DefaultMatchesRFC3339Nano(t *testing.T) {
 func TestNew_BuiltinsRegistered(t *testing.T) {
 	ins := New()
 	assert.Contains(t, ins.decoders, "Time")
-	assert.Contains(t, ins.decoders, "")
+	// "" key is no longer in decoders; decodeBigAuto is now an anonymous decoder.
+	assert.NotContains(t, ins.decoders, "")
 	assert.Contains(t, ins.decoders, "uuid.UUID")
+	// Verify that at least one anonymous decoder is registered (decodeBigAuto).
+	assert.NotEmpty(t, ins.anonymousDecoders, "decodeBigAuto should be registered as an anonymous decoder")
 }
 
 func TestNew_UserCanOverride(t *testing.T) {
@@ -646,7 +649,7 @@ func TestNew_UserCanOverride(t *testing.T) {
 
 	ts := time.Now().UTC()
 	buf := gobEncodeVal(t, ts)
-	vals, err := ins.Decode(buf)
+	vals, err := ins.Stream(buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 1)
 	ov, ok := vals[0].(OpaqueValue)
@@ -710,7 +713,7 @@ func TestRegisterDecoder_TimeCombinations(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ins := tc.setup()
-			vals, err := ins.Decode(getBuf())
+			vals, err := ins.Stream(getBuf()).Collect()
 			require.NoError(t, err)
 			require.Len(t, vals, 1)
 

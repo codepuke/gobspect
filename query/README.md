@@ -61,7 +61,7 @@ Segments are separated by `.`.
 | `[Field==value]`  | Filter: keep only elements where `Field` is a number equal to `value`, or a bool equal to `true`/`false` (also `<`, `>`, `<=`, `>=` for numbers) |
 | `..Name` | Recursive descent: find all nodes named `Name` at any depth |
 | `..[Filter]` | Wildcard recursive descent: traverse all depths, keep nodes matching `Filter` |
-| `A,B,C` | Field projection: returns an anonymous struct containing only the requested fields |
+| `A,B,C` | Field projection: returns an anonymous struct containing only the requested fields (see [Field projection](#field-projection)) |
 
 An empty path (`""`) resolves to the root value itself.
 
@@ -220,7 +220,27 @@ query.All(root, "Items.*.SKU,Price")
 query.Get(root, "Orders.0.Customer.Name,Email")
 ```
 
-> **Note:** Projection syntax `A,B` must be a single segment consisting of exact field names. You cannot nest paths inside a projection (i.e. `A,B.C` is not supported).
+### Nested fields in projections
+
+Use `/` as a path separator *within* a projection field to reach a nested struct. The column name in the output is the last component after the final `/`.
+
+```go
+// Items have a nested Address struct — pull Zip alongside flat fields
+query.All(root, "Items.*.SKU,Price,Address/Zip")
+// → each result: StructValue{SKU: …, Price: …, Zip: …}
+
+// Three levels deep
+query.All(root, "Items.*.ID,Shipping/Address/Zip")
+// → each result: StructValue{ID: …, Zip: …}
+```
+
+`/` is only meaningful inside a projection segment (i.e. when a comma is also present). A bare token like `Address/Zip` with no comma is treated as a literal field name, not a nested path — use `Address.Zip` for regular single-value navigation.
+
+Two projection fields that resolve to the same leaf name are a **parse-time error**:
+
+```go
+query.All(root, "Billing/Zip,Shipping/Zip")  // error: duplicate column "Zip"
+```
 
 ## Map key navigation
 
@@ -248,10 +268,11 @@ These accept a path expression as a plain string and panic if the expression is 
 func Get(root gobspect.Value, expr string) (gobspect.Value, bool)
 func MustGet(root gobspect.Value, expr string) gobspect.Value
 func All(root gobspect.Value, expr string) []gobspect.Value
+func AllSeq(root gobspect.Value, expr string) iter.Seq[gobspect.Value]
 func Keys(root gobspect.Value, expr string) ([]string, bool)
 ```
 
-`Get` returns `(nil, false)` when the path does not resolve. `MustGet` panics with a message identifying the full expression and the failing segment. `All` returns `nil` (not an empty slice) when nothing matches.
+`Get` returns `(nil, false)` when the path does not resolve. `MustGet` panics with a message identifying the full expression and the failing segment. `All` returns `nil` (not an empty slice) when nothing matches. `AllSeq` is the lazy iterator variant — use it for early-break or streaming scenarios.
 
 ### Pre-compiled path functions
 
@@ -261,6 +282,7 @@ Use these when evaluating the same path against many roots, or when you need to 
 func Parse(expr string) (Path, error)
 func GetPath(root gobspect.Value, p Path) (gobspect.Value, bool)
 func AllPath(root gobspect.Value, p Path) []gobspect.Value
+func AllPathSeq(root gobspect.Value, p Path) iter.Seq[gobspect.Value]
 func KeysPath(root gobspect.Value, p Path) ([]string, bool)
 ```
 
@@ -274,6 +296,17 @@ for _, root := range roots {
     // ...
 }
 ```
+
+`AllPathSeq` returns a lazy iterator; use it when you may break early or want to stream results without accumulating a slice:
+
+```go
+for addr := range query.AllPathSeq(root, p) {
+    fmt.Println(addr)
+    // break here is safe — iteration stops immediately
+}
+```
+
+The one-off string counterpart is `AllSeq(root, expr)`, which panics on invalid expressions just like `All`.
 
 ### `Keys` for exploration
 

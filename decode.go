@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"iter"
 )
 
 // countingReader wraps a byteReadReader and enforces a byte limit.
@@ -55,17 +54,19 @@ func wrapWithLimit(r io.Reader, limit int64) byteReadReader {
 	return br
 }
 
-// OpaqueDecoder decodes the raw bytes of a GobEncoder, BinaryMarshaler, or
+// DecoderFunc decodes the raw bytes of a GobEncoder, BinaryMarshaler, or
 // TextMarshaler blob into a human-meaningful value.
 //
 // The returned value should be a simple Go type (string, int, float, map, etc.)
 // suitable for display. It does not need to reconstruct the original Go type.
-type OpaqueDecoder func(data []byte) (any, error)
+type DecoderFunc func([]byte) (any, error)
+
+// OpaqueDecoder is kept for backward compatibility.
+// New code should use [DecoderFunc].
+type OpaqueDecoder = DecoderFunc
 
 // Options configures decoding limits.
 type Options struct {
-	// MaxDepth limits recursion depth for nested types. Zero means no limit.
-	MaxDepth int
 	// MaxBytes limits total bytes read from the stream. Zero means no limit.
 	MaxBytes int64
 }
@@ -90,14 +91,15 @@ func WithTimeFormat(layout string) Option {
 // Inspector is the top-level entry point. It holds the opaque decoder registry
 // and decoding options. Create one with [New].
 type Inspector struct {
-	decoders map[string]OpaqueDecoder
-	options  Options
+	decoders         map[string]DecoderFunc
+	anonymousDecoders []DecoderFunc
+	options          Options
 }
 
 // New returns an Inspector with all built-in opaque decoders pre-registered.
 func New(opts ...Option) *Inspector {
 	ins := &Inspector{
-		decoders: make(map[string]OpaqueDecoder),
+		decoders: make(map[string]DecoderFunc),
 	}
 	registerBuiltins(ins)
 	for _, o := range opts {
@@ -107,8 +109,15 @@ func New(opts ...Option) *Inspector {
 }
 
 // RegisterDecoder adds or overrides the opaque decoder for the given type name.
-func (ins *Inspector) RegisterDecoder(typeName string, dec OpaqueDecoder) {
+func (ins *Inspector) RegisterDecoder(typeName string, dec DecoderFunc) {
 	ins.decoders[typeName] = dec
+}
+
+// RegisterAnonymousDecoder appends dec to the list of anonymous decoders tried
+// for opaque values with an empty type name. Decoders are tried in registration
+// order; the first one that returns a non-error result wins.
+func (ins *Inspector) RegisterAnonymousDecoder(dec DecoderFunc) {
+	ins.anonymousDecoders = append(ins.anonymousDecoders, dec)
 }
 
 // — Stream state ————————————————————————————————————————————————————————————
@@ -124,12 +133,14 @@ type streamDecoder struct {
 	r        byteReadReader
 	registry map[int]wireTypeDef // type ID → wireTypeDef
 	types    []TypeInfo          // accumulated in definition order
+	byID     map[int]int         // type ID → index in types
 }
 
 func newStreamDecoder(r byteReadReader) *streamDecoder {
 	return &streamDecoder{
 		r:        r,
 		registry: make(map[int]wireTypeDef),
+		byID:     make(map[int]int),
 	}
 }
 
@@ -167,17 +178,36 @@ func (sd *streamDecoder) nextRawMessage() (rawID int64, r *bytes.Reader, err err
 }
 
 // processTypeDef decodes a wireType definition from the message body and
-// registers it in the stream's type registry.
+// registers it via registerAndResolve.
 func (sd *streamDecoder) processTypeDef(id int, r io.ByteReader) error {
 	def, err := decodeWireType(r)
 	if err != nil {
 		return fmt.Errorf("gob: decoding wireType for ID %d: %w", id, err)
 	}
+	return sd.registerAndResolve(id, def)
+}
+
+// registerAndResolve registers a new type definition, converts it to TypeInfo,
+// back-fills TypeRef.Name for any existing types that reference this ID, and
+// records the index in byID for O(1) lookup.
+func (sd *streamDecoder) registerAndResolve(id int, def wireTypeDef) error {
 	sd.registry[id] = def
 	ti, err := sd.wireTypeToTypeInfo(id, def)
 	if err != nil {
 		return fmt.Errorf("gob: converting wireType to TypeInfo for ID %d: %w", id, err)
 	}
+	// Back-fill existing TypeRefs that were waiting for this ID.
+	if name := wireTypeDefName(def); name != "" {
+		for i := range sd.types {
+			if sd.types[i].Key != nil && sd.types[i].Key.ID == id && sd.types[i].Key.Name == "" {
+				sd.types[i].Key.Name = name
+			}
+			if sd.types[i].Elem != nil && sd.types[i].Elem.ID == id && sd.types[i].Elem.Name == "" {
+				sd.types[i].Elem.Name = name
+			}
+		}
+	}
+	sd.byID[id] = len(sd.types)
 	sd.types = append(sd.types, ti)
 	return nil
 }
@@ -268,33 +298,6 @@ func (sd *streamDecoder) resolveRef(id int) *TypeRef {
 	return ref
 }
 
-// resolveAllRefs does a second pass over collected TypeInfos and fills in
-// TypeRef.Name for any refs whose name was empty at parse time because the
-// gob encoder sends outer types before inner types.
-func (sd *streamDecoder) resolveAllRefs() {
-	for i := range sd.types {
-		ti := &sd.types[i]
-		if ti.Key != nil && ti.Key.Name == "" {
-			ti.Key.Name = sd.resolveRefName(ti.Key.ID)
-		}
-		if ti.Elem != nil && ti.Elem.Name == "" {
-			ti.Elem.Name = sd.resolveRefName(ti.Elem.ID)
-		}
-	}
-}
-
-// resolveRefName returns the name for the given type ID from builtins or the
-// registry, or "" if not found.
-func (sd *streamDecoder) resolveRefName(id int) string {
-	if name, ok := builtinTypeName(id); ok {
-		return name
-	}
-	if def, ok := sd.registry[id]; ok {
-		return wireTypeDefName(def)
-	}
-	return ""
-}
-
 // builtinTypeName returns the canonical name for a predefined gob type ID.
 func builtinTypeName(id int) (string, bool) {
 	switch id {
@@ -339,135 +342,3 @@ func wireTypeDefName(def wireTypeDef) string {
 	return ""
 }
 
-// — Public API ——————————————————————————————————————————————————————————————
-
-// StreamResult is the comprehensive result of decoding a full gob stream.
-type StreamResult struct {
-	Types  []TypeInfo // all type definitions encountered
-	Values []Value    // all top-level values decoded
-	Err    error      // first error encountered, nil if clean
-}
-
-// iterate is the shared core loop. It yields each decoded value in turn,
-// or (zero, err) on the first error, then stops. Type definition messages are
-// processed as side-effects on sd without being yielded.
-func iterate(sd *streamDecoder, vd *valueDecoder) iter.Seq2[Value, error] {
-	return func(yield func(Value, error) bool) {
-		for {
-			rawID, msgR, err := sd.nextRawMessage()
-			if err == io.EOF {
-				return
-			}
-			if err != nil {
-				yield(nil, err)
-				return
-			}
-			if rawID < 0 {
-				if err := sd.processTypeDef(int(-rawID), msgR); err != nil {
-					yield(nil, err)
-					return
-				}
-			} else {
-				v, err := vd.decodeTopLevelValue(int(rawID), &messageReader{cur: msgR})
-				if err != nil {
-					yield(nil, err)
-					return
-				}
-				if !yield(v, nil) {
-					return
-				}
-			}
-		}
-	}
-}
-
-// Values returns an iterator that yields one decoded Value per top-level gob
-// value in the stream. On error it yields (nil, err) and stops. The iterator
-// is safe to use with the range-over-func syntax:
-//
-//	for v, err := range ins.Values(r) {
-//	    if err != nil { ... }
-//	    fmt.Println(gobspect.Format(v))
-//	}
-//
-// An early break from the loop is safe; the iterator will not read past the
-// break point.
-func (ins *Inspector) Values(r io.Reader) iter.Seq2[Value, error] {
-	sd := newStreamDecoder(wrapWithLimit(r, ins.options.MaxBytes))
-	vd := newValueDecoder(ins, sd)
-	seq := iterate(sd, vd)
-	return func(yield func(Value, error) bool) {
-		seq(yield)
-		sd.resolveAllRefs()
-	}
-}
-
-// DecodeTypes reads the gob stream from r and returns TypeInfo for every type
-// definition encountered, in the order they appear in the stream. Value
-// messages are skipped. Returns the partial result alongside any error.
-func (ins *Inspector) DecodeTypes(r io.Reader) ([]TypeInfo, error) {
-	sd := newStreamDecoder(wrapWithLimit(r, ins.options.MaxBytes))
-	for {
-		rawID, msgR, err := sd.nextRawMessage()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return sd.types, err
-		}
-		if rawID < 0 {
-			if err := sd.processTypeDef(int(-rawID), msgR); err != nil {
-				return sd.types, err
-			}
-		}
-		// value messages (rawID > 0) are ignored
-	}
-	sd.resolveAllRefs()
-	return sd.types, nil
-}
-
-// DecodeStream reads the full gob stream and returns all type definitions and
-// decoded values. Partial results are returned alongside any error.
-func (ins *Inspector) DecodeStream(r io.Reader) *StreamResult {
-	sd := newStreamDecoder(wrapWithLimit(r, ins.options.MaxBytes))
-	vd := newValueDecoder(ins, sd)
-	var (
-		values    []Value
-		resultErr error
-	)
-	for v, err := range iterate(sd, vd) {
-		if err != nil {
-			resultErr = err
-			break
-		}
-		values = append(values, v)
-	}
-	sd.resolveAllRefs()
-	return &StreamResult{Types: sd.types, Values: values, Err: resultErr}
-}
-
-// DecodeSchema reads the gob stream from r, collects all type definitions, and
-// returns them formatted as an AST-based Schema.
-// It is a convenience wrapper around [Inspector.DecodeTypes] + [FormatSchema].
-// Partial results are returned alongside any error, matching the behaviour of
-// [Inspector.DecodeTypes].
-func (ins *Inspector) DecodeSchema(r io.Reader) (*Schema, error) {
-	types, err := ins.DecodeTypes(r)
-	return FormatSchema(types), err
-}
-
-// Decode reads all values from the gob stream and returns them.
-func (ins *Inspector) Decode(r io.Reader) ([]Value, error) {
-	var (
-		values []Value
-		retErr error
-	)
-	for v, err := range ins.Values(r) {
-		if err != nil {
-			retErr = err
-			break
-		}
-		values = append(values, v)
-	}
-	return values, retErr
-}

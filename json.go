@@ -27,35 +27,6 @@ func ToJSONIndent(v Value, prefix, indent string) ([]byte, error) {
 	return json.MarshalIndent(m, prefix, indent)
 }
 
-// MarshalJSON implements json.Marshaler for StreamResult.
-// The produced object has the shape: {types: [...], values: [...], error: string|null}.
-func (sr *StreamResult) MarshalJSON() ([]byte, error) {
-	values := make([]map[string]any, 0, len(sr.Values))
-	for i, v := range sr.Values {
-		m, err := valueToJSONMap(v)
-		if err != nil {
-			return nil, fmt.Errorf("marshaling value %d: %w", i, err)
-		}
-		values = append(values, m)
-	}
-
-	var errStr *string
-	if sr.Err != nil {
-		s := sr.Err.Error()
-		errStr = &s
-	}
-
-	return json.Marshal(struct {
-		Types  []TypeInfo       `json:"types"`
-		Values []map[string]any `json:"values"`
-		Error  *string          `json:"error"`
-	}{
-		Types:  sr.Types,
-		Values: values,
-		Error:  errStr,
-	})
-}
-
 // valueToJSONMap converts a Value to a map[string]any suitable for JSON encoding.
 func valueToJSONMap(v Value) (map[string]any, error) {
 	switch v := v.(type) {
@@ -119,7 +90,7 @@ func valueToJSONMap(v Value) (map[string]any, error) {
 		return map[string]any{
 			"kind":     "struct",
 			"typeName": v.TypeName,
-			"typeId":   v.TypeID,
+			"typeId":   v.GobTypeID,
 			"fields":   fields,
 		}, nil
 
@@ -139,7 +110,7 @@ func valueToJSONMap(v Value) (map[string]any, error) {
 		return map[string]any{
 			"kind":     "map",
 			"typeName": v.TypeName,
-			"typeId":   v.TypeID,
+			"typeId":   v.GobTypeID,
 			"keyType":  v.KeyType,
 			"elemType": v.ElemType,
 			"entries":  entries,
@@ -153,7 +124,7 @@ func valueToJSONMap(v Value) (map[string]any, error) {
 		return map[string]any{
 			"kind":     "slice",
 			"typeName": v.TypeName,
-			"typeId":   v.TypeID,
+			"typeId":   v.GobTypeID,
 			"elemType": v.ElemType,
 			"elems":    elems,
 		}, nil
@@ -166,7 +137,7 @@ func valueToJSONMap(v Value) (map[string]any, error) {
 		return map[string]any{
 			"kind":     "array",
 			"typeName": v.TypeName,
-			"typeId":   v.TypeID,
+			"typeId":   v.GobTypeID,
 			"elemType": v.ElemType,
 			"len":      v.Len,
 			"elems":    elems,

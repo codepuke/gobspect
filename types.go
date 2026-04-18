@@ -4,13 +4,17 @@ package gobspect
 // Use a type switch to dispatch on the concrete type.
 type Value interface {
 	gobValue()
+	// TypeID returns the stream-scoped type ID for composite values
+	// (StructValue, MapValue, SliceValue, ArrayValue).
+	// Scalar and opaque values return 0.
+	TypeID() int
 }
 
 // StructValue represents a decoded gob struct.
 type StructValue struct {
-	TypeName string
-	TypeID   int
-	Fields   []Field
+	TypeName  string
+	GobTypeID int
+	Fields    []Field
 }
 
 // Field is a single named field within a StructValue.
@@ -21,11 +25,11 @@ type Field struct {
 
 // MapValue represents a decoded gob map.
 type MapValue struct {
-	TypeName string
-	TypeID   int
-	KeyType  string // descriptive label for the key type
-	ElemType string // descriptive label for the element type
-	Entries  []MapEntry
+	TypeName  string
+	GobTypeID int
+	KeyType   string // descriptive label for the key type
+	ElemType  string // descriptive label for the element type
+	Entries   []MapEntry
 }
 
 // MapEntry is a single key-value pair within a MapValue.
@@ -36,19 +40,19 @@ type MapEntry struct {
 
 // SliceValue represents a decoded gob slice.
 type SliceValue struct {
-	TypeName string
-	TypeID   int
-	ElemType string
-	Elems    []Value
+	TypeName  string
+	GobTypeID int
+	ElemType  string
+	Elems     []Value
 }
 
 // ArrayValue represents a decoded gob array.
 type ArrayValue struct {
-	TypeName string
-	TypeID   int
-	ElemType string
-	Len      int
-	Elems    []Value
+	TypeName  string
+	GobTypeID int
+	ElemType  string
+	Len       int
+	Elems     []Value
 }
 
 // IntValue holds a decoded signed integer.
@@ -104,6 +108,61 @@ func (BytesValue) gobValue()     {}
 func (NilValue) gobValue()       {}
 func (InterfaceValue) gobValue() {}
 func (OpaqueValue) gobValue()    {}
+
+// TypeID implementations — composites return their stream-scoped type ID;
+// scalars and opaque values return 0.
+func (v StructValue) TypeID() int  { return v.GobTypeID }
+func (v MapValue) TypeID() int     { return v.GobTypeID }
+func (v SliceValue) TypeID() int   { return v.GobTypeID }
+func (v ArrayValue) TypeID() int   { return v.GobTypeID }
+func (IntValue) TypeID() int       { return 0 }
+func (UintValue) TypeID() int      { return 0 }
+func (FloatValue) TypeID() int     { return 0 }
+func (ComplexValue) TypeID() int   { return 0 }
+func (BoolValue) TypeID() int      { return 0 }
+func (StringValue) TypeID() int    { return 0 }
+func (BytesValue) TypeID() int     { return 0 }
+func (NilValue) TypeID() int       { return 0 }
+func (InterfaceValue) TypeID() int { return 0 }
+func (OpaqueValue) TypeID() int    { return 0 }
+
+// ValueKind returns a short lowercase string identifying the concrete type of v:
+// "struct", "map", "slice", "array", "int", "uint", "float", "complex",
+// "bool", "string", "bytes", "nil", "interface", "opaque", or "unknown".
+func ValueKind(v Value) string {
+	switch v.(type) {
+	case StructValue:
+		return "struct"
+	case MapValue:
+		return "map"
+	case SliceValue:
+		return "slice"
+	case ArrayValue:
+		return "array"
+	case IntValue:
+		return "int"
+	case UintValue:
+		return "uint"
+	case FloatValue:
+		return "float"
+	case ComplexValue:
+		return "complex"
+	case BoolValue:
+		return "bool"
+	case StringValue:
+		return "string"
+	case BytesValue:
+		return "bytes"
+	case NilValue:
+		return "nil"
+	case InterfaceValue:
+		return "interface"
+	case OpaqueValue:
+		return "opaque"
+	default:
+		return "unknown"
+	}
+}
 
 // — Type metadata ——————————————————————————————————————————————————————————
 

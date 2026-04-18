@@ -2,14 +2,36 @@ package query
 
 import (
 	"fmt"
+	"iter"
+	"slices"
 
 	"github.com/codepuke/gobspect"
 )
 
+// AllPathSeq returns an iterator over all values matched by p against root,
+// expanding wildcard segments lazily. The caller may break early; the iterator
+// will stop producing values as soon as yield returns false.
+func AllPathSeq(root gobspect.Value, p Path) iter.Seq[gobspect.Value] {
+	return func(yield func(gobspect.Value) bool) {
+		allWalkSeq(root, p.segs, yield)
+	}
+}
+
+// AllSeq returns an iterator over all values matched by expr against root,
+// expanding * segments lazily. Panics if expr is syntactically invalid
+// (matching All's behaviour).
+func AllSeq(root gobspect.Value, expr string) iter.Seq[gobspect.Value] {
+	p, err := Parse(expr)
+	if err != nil {
+		panic(fmt.Sprintf("query.AllSeq: invalid path expression %q: %v", expr, err))
+	}
+	return AllPathSeq(root, p)
+}
+
 // AllPath returns all values matched by p against root, expanding wildcard
 // segments. Returns nil (not an empty slice) when nothing matches.
 func AllPath(root gobspect.Value, p Path) []gobspect.Value {
-	results := allWalk(root, p.segs)
+	results := slices.Collect(AllPathSeq(root, p))
 	if len(results) == 0 {
 		return nil
 	}
@@ -24,6 +46,114 @@ func All(root gobspect.Value, expr string) []gobspect.Value {
 		panic(fmt.Sprintf("query.All: invalid path expression %q: %v", expr, err))
 	}
 	return AllPath(root, p)
+}
+
+// allWalkSeq is the lazy counterpart to allWalk. It calls yield for each
+// matching value and returns false as soon as yield returns false (early
+// termination). Returns false if the caller requested an early stop.
+func allWalkSeq(cur gobspect.Value, segs []segment, yield func(gobspect.Value) bool) bool {
+	cur = unwrapInterface(cur)
+	if cur == nil {
+		return true
+	}
+
+	if len(segs) == 0 {
+		return yield(cur)
+	}
+
+	seg := segs[0]
+	rest := segs[1:]
+
+	switch seg.kind {
+	case segField:
+		next, ok := stepField(cur, seg.name)
+		if !ok {
+			return true
+		}
+		return allWalkSeq(next, rest, yield)
+
+	case segIndex:
+		next, ok := stepIndex(cur, seg.index)
+		if !ok {
+			return true
+		}
+		return allWalkSeq(next, rest, yield)
+
+	case segWildcard:
+		elems := collectAll(cur)
+		for _, elem := range elems {
+			if !allWalkSeq(elem, rest, yield) {
+				return false
+			}
+		}
+		return true
+
+	case segFilter:
+		elems, ok := collectFiltered(cur, seg)
+		if !ok {
+			return true
+		}
+		for _, elem := range elems {
+			if !allWalkSeq(elem, rest, yield) {
+				return false
+			}
+		}
+		return true
+
+	case segDescend:
+		if seg.name == "" {
+			// Wildcard descent: test cur against the leading filter(s) in rest
+			// (pre-order), then recurse into each direct child with the full
+			// descent+rest prepended.
+			if !applyFiltersToNodeSeq(cur, rest, yield) {
+				return false
+			}
+			for _, child := range descendAll(cur) {
+				if !allWalkSeq(child, segs, yield) {
+					return false
+				}
+			}
+			return true
+		}
+		// Named recursive descent: pre-order depth-first traversal.
+		if next, ok := stepField(cur, seg.name); ok {
+			if !allWalkSeq(next, rest, yield) {
+				return false
+			}
+		}
+		for _, child := range descendAll(cur) {
+			if !allWalkSeq(child, segs, yield) {
+				return false
+			}
+		}
+		return true
+
+	case segProject:
+		projected := buildProjection(cur, seg.projectFields)
+		if projected == nil {
+			return true
+		}
+		return allWalkSeq(projected, rest, yield)
+
+	default:
+		return true
+	}
+}
+
+// applyFiltersToNodeSeq is the lazy counterpart to applyFiltersToNode.
+// Returns false if yield returned false (early stop).
+func applyFiltersToNodeSeq(v gobspect.Value, segs []segment, yield func(gobspect.Value) bool) bool {
+	if len(segs) == 0 || segs[0].kind != segFilter {
+		return allWalkSeq(v, segs, yield)
+	}
+	i := 0
+	for i < len(segs) && segs[i].kind == segFilter {
+		if !matchesFilter(unwrapInterface(v), segs[i]) {
+			return true
+		}
+		i++
+	}
+	return allWalkSeq(v, segs[i:], yield)
 }
 
 // allWalk recursively evaluates segs against cur, collecting all matching

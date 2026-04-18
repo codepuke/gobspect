@@ -3,6 +3,7 @@ package gobspect_test
 import (
 	"bytes"
 	"encoding/gob"
+	"io"
 	"math/big"
 	"testing"
 	"time"
@@ -32,6 +33,14 @@ func gobEncodeMultiple(tb testing.TB, vals ...any) *bytes.Buffer {
 	return &buf
 }
 
+// decodeTypes is a test helper that replicates the old ins.DecodeTypes behavior
+// using the new Stream API: drain the stream and return accumulated types.
+func decodeTypes(ins *gobspect.Inspector, r io.Reader) ([]gobspect.TypeInfo, error) {
+	s := ins.Stream(r)
+	_, err := s.Collect()
+	return s.Types(), err
+}
+
 // ————————————————————————————————————————————————————————————————————————————
 // Fixtures
 
@@ -57,7 +66,7 @@ func TestDecodeTypes_SimpleStruct(t *testing.T) {
 	buf := gobEncode(t, Point{X: 1, Y: 2})
 
 	ins := gobspect.New()
-	types, err := ins.DecodeTypes(buf)
+	types, err := decodeTypes(ins, buf)
 	require.NoError(t, err)
 
 	require.Len(t, types, 1)
@@ -76,7 +85,7 @@ func TestDecodeTypes_NestedStruct(t *testing.T) {
 	buf := gobEncode(t, NamedPoint{Name: "origin", Pt: Point{}})
 
 	ins := gobspect.New()
-	types, err := ins.DecodeTypes(buf)
+	types, err := decodeTypes(ins, buf)
 	require.NoError(t, err)
 
 	// NamedPoint references Point, so both should be defined.
@@ -106,7 +115,7 @@ func TestDecodeTypes_Slice(t *testing.T) {
 	buf := gobEncode(t, IntSlice{1, 2, 3})
 
 	ins := gobspect.New()
-	types, err := ins.DecodeTypes(buf)
+	types, err := decodeTypes(ins, buf)
 	require.NoError(t, err)
 
 	require.Len(t, types, 1)
@@ -121,7 +130,7 @@ func TestDecodeTypes_Map(t *testing.T) {
 	buf := gobEncode(t, StringMap{"a": 1})
 
 	ins := gobspect.New()
-	types, err := ins.DecodeTypes(buf)
+	types, err := decodeTypes(ins, buf)
 	require.NoError(t, err)
 
 	require.Len(t, types, 1)
@@ -139,7 +148,7 @@ func TestDecodeTypes_Array(t *testing.T) {
 	buf := gobEncode(t, IntArray{1, 2, 3, 4})
 
 	ins := gobspect.New()
-	types, err := ins.DecodeTypes(buf)
+	types, err := decodeTypes(ins, buf)
 	require.NoError(t, err)
 
 	require.Len(t, types, 1)
@@ -156,7 +165,7 @@ func TestDecodeTypes_MultipleValues(t *testing.T) {
 	buf := gobEncodeMultiple(t, Point{1, 2}, Point{3, 4})
 
 	ins := gobspect.New()
-	types, err := ins.DecodeTypes(buf)
+	types, err := decodeTypes(ins, buf)
 	require.NoError(t, err)
 
 	// Point should appear exactly once regardless of how many values are sent.
@@ -174,7 +183,7 @@ func TestDecodeTypes_MultipleDistinctTypes(t *testing.T) {
 	buf := gobEncodeMultiple(t, Point{1, 2}, StringMap{"k": 7})
 
 	ins := gobspect.New()
-	types, err := ins.DecodeTypes(buf)
+	types, err := decodeTypes(ins, buf)
 	require.NoError(t, err)
 
 	byName := make(map[string]gobspect.TypeInfo)
@@ -189,7 +198,7 @@ func TestDecodeTypes_TypeIDsArePositive(t *testing.T) {
 	buf := gobEncode(t, NamedPoint{Name: "a", Pt: Point{1, 2}})
 
 	ins := gobspect.New()
-	types, err := ins.DecodeTypes(buf)
+	types, err := decodeTypes(ins, buf)
 	require.NoError(t, err)
 
 	for _, ti := range types {
@@ -199,66 +208,19 @@ func TestDecodeTypes_TypeIDsArePositive(t *testing.T) {
 
 func TestDecodeTypes_EmptyStream(t *testing.T) {
 	ins := gobspect.New()
-	types, err := ins.DecodeTypes(bytes.NewReader(nil))
+	types, err := decodeTypes(ins, bytes.NewReader(nil))
 	require.NoError(t, err)
 	assert.Empty(t, types)
 }
 
 // ————————————————————————————————————————————————————————————————————————————
-// MaxDepth enforcement (bug 2.1)
-
-func TestMaxDepth_NestedStructBlocked(t *testing.T) {
-	// MaxDepth:1 — top-level NamedPoint is depth 1 (ok), nested Point is depth 2 (blocked).
-	buf := gobEncode(t, NamedPoint{Name: "a", Pt: Point{X: 1, Y: 2}})
-	ins := gobspect.New(gobspect.WithOptions(gobspect.Options{MaxDepth: 1}))
-	_, err := ins.Decode(buf)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "max depth")
-}
-
-func TestMaxDepth_FlatStructAllowed(t *testing.T) {
-	// MaxDepth:1 — a flat struct with no nested struct fields is fine.
-	buf := gobEncode(t, Point{X: 3, Y: 7})
-	ins := gobspect.New(gobspect.WithOptions(gobspect.Options{MaxDepth: 1}))
-	vals, err := ins.Decode(buf)
-	require.NoError(t, err)
-	require.Len(t, vals, 1)
-}
-
-func TestMaxDepth_Zero_Unlimited(t *testing.T) {
-	// MaxDepth:0 (default) imposes no limit — deeply nested decode succeeds.
-	type D3 struct{ Inner NamedPoint }
-	buf := gobEncode(t, D3{Inner: NamedPoint{Name: "x", Pt: Point{1, 2}}})
-	ins := gobspect.New(gobspect.WithOptions(gobspect.Options{MaxDepth: 0}))
-	vals, err := ins.Decode(buf)
-	require.NoError(t, err)
-	require.Len(t, vals, 1)
-}
-
-func TestMaxDepth_ExactLimit(t *testing.T) {
-	// MaxDepth:2 allows exactly 2 levels (NamedPoint→Point) but blocks 3 (D3→NamedPoint→Point).
-	type D3 struct{ Inner NamedPoint }
-
-	buf2 := gobEncode(t, NamedPoint{Name: "a", Pt: Point{1, 2}})
-	ins := gobspect.New(gobspect.WithOptions(gobspect.Options{MaxDepth: 2}))
-	_, err := ins.Decode(buf2)
-	require.NoError(t, err, "depth 2 should succeed with MaxDepth:2")
-
-	buf3 := gobEncode(t, D3{Inner: NamedPoint{Name: "a", Pt: Point{1, 2}}})
-	ins3 := gobspect.New(gobspect.WithOptions(gobspect.Options{MaxDepth: 2}))
-	_, err = ins3.Decode(buf3)
-	require.Error(t, err, "depth 3 should fail with MaxDepth:2")
-	assert.Contains(t, err.Error(), "max depth")
-}
-
-// ————————————————————————————————————————————————————————————————————————————
-// MaxBytes enforcement (bug 2.1)
+// MaxBytes enforcement
 
 func TestMaxBytes_LimitExceeded(t *testing.T) {
 	// Encode a non-trivial value, then decode with MaxBytes set smaller than the stream.
 	buf := gobEncode(t, NamedPoint{Name: "hello world", Pt: Point{X: 100, Y: 200}})
 	ins := gobspect.New(gobspect.WithOptions(gobspect.Options{MaxBytes: 5}))
-	_, err := ins.Decode(buf)
+	_, err := ins.Stream(buf).Collect()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "MaxBytes")
 }
@@ -267,7 +229,7 @@ func TestMaxBytes_Zero_Unlimited(t *testing.T) {
 	// MaxBytes:0 (default) imposes no limit.
 	buf := gobEncode(t, NamedPoint{Name: "hello world", Pt: Point{X: 100, Y: 200}})
 	ins := gobspect.New(gobspect.WithOptions(gobspect.Options{MaxBytes: 0}))
-	vals, err := ins.Decode(buf)
+	vals, err := ins.Stream(buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 1)
 }
@@ -294,7 +256,7 @@ func TestMaxBytes_ReadByteBoundary(t *testing.T) {
 	// length prefix) increments cr.n to boundary+1, exceeding the limit.
 	// The error must surface cleanly via ReadByte, not be silently swallowed.
 	ins := gobspect.New(gobspect.WithOptions(gobspect.Options{MaxBytes: boundary}))
-	vals, err := ins.Decode(bytes.NewReader(multiBytes))
+	vals, err := ins.Stream(bytes.NewReader(multiBytes)).Collect()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "MaxBytes",
 		"limit error must name MaxBytes so callers can identify it")
@@ -309,11 +271,12 @@ func TestMaxBytes_PartialResults(t *testing.T) {
 	totalLen := buf.Len()
 	// Set limit between the two messages so the first succeeds.
 	ins := gobspect.New(gobspect.WithOptions(gobspect.Options{MaxBytes: int64(totalLen / 2)}))
-	res := ins.DecodeStream(buf)
-	require.Error(t, res.Err)
-	assert.Contains(t, res.Err.Error(), "MaxBytes")
+	s := ins.Stream(buf)
+	values, err := s.Collect()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "MaxBytes")
 	// At least the first value was decoded before the limit was hit.
-	assert.NotEmpty(t, res.Values, "expected partial results before limit")
+	assert.NotEmpty(t, values, "expected partial results before limit")
 }
 
 // ————————————————————————————————————————————————————————————————————————————
@@ -324,7 +287,7 @@ func TestValues_MultiValueStream(t *testing.T) {
 
 	ins := gobspect.New()
 	var got []gobspect.Value
-	for v, err := range ins.Values(buf) {
+	for v, err := range ins.Stream(buf).Values() {
 		require.NoError(t, err)
 		got = append(got, v)
 	}
@@ -336,7 +299,7 @@ func TestValues_SingleValue(t *testing.T) {
 
 	ins := gobspect.New()
 	var got []gobspect.Value
-	for v, err := range ins.Values(buf) {
+	for v, err := range ins.Stream(buf).Values() {
 		require.NoError(t, err)
 		got = append(got, v)
 	}
@@ -349,7 +312,7 @@ func TestValues_SingleValue(t *testing.T) {
 func TestValues_EmptyStream(t *testing.T) {
 	ins := gobspect.New()
 	var got []gobspect.Value
-	for v, err := range ins.Values(bytes.NewReader(nil)) {
+	for v, err := range ins.Stream(bytes.NewReader(nil)).Values() {
 		require.NoError(t, err)
 		got = append(got, v)
 	}
@@ -367,7 +330,7 @@ func TestValues_ErrorMidStream(t *testing.T) {
 	ins := gobspect.New()
 	var values []gobspect.Value
 	var gotErr error
-	for v, err := range ins.Values(truncated) {
+	for v, err := range ins.Stream(truncated).Values() {
 		if err != nil {
 			gotErr = err
 			break
@@ -387,7 +350,7 @@ func TestValues_EarlyBreak(t *testing.T) {
 
 	ins := gobspect.New()
 	var got []gobspect.Value
-	for v, err := range ins.Values(buf) {
+	for v, err := range ins.Stream(buf).Values() {
 		require.NoError(t, err)
 		got = append(got, v)
 		break // stop after first
@@ -405,7 +368,7 @@ func TestDecodeTypes_ElemRefResolved(t *testing.T) {
 	buf := gobEncode(t, Tags{Point{1, 2}})
 
 	ins := gobspect.New()
-	types, err := ins.DecodeTypes(buf)
+	types, err := decodeTypes(ins, buf)
 	require.NoError(t, err)
 
 	byName := make(map[string]gobspect.TypeInfo)
@@ -441,7 +404,7 @@ type ComplexSlice []complex128
 func TestDecodeTypes_BoolSliceElemType(t *testing.T) {
 	buf := gobEncode(t, BoolSlice{true, false})
 	ins := gobspect.New()
-	vals, err := ins.Decode(buf)
+	vals, err := ins.Stream(buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 1)
 	sv, ok := vals[0].(gobspect.SliceValue)
@@ -454,7 +417,7 @@ func TestDecodeTypes_BoolSliceElemType(t *testing.T) {
 func TestDecodeTypes_UintSliceElemType(t *testing.T) {
 	buf := gobEncode(t, UintSlice{1, 2, 3})
 	ins := gobspect.New()
-	vals, err := ins.Decode(buf)
+	vals, err := ins.Stream(buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 1)
 	sv, ok := vals[0].(gobspect.SliceValue)
@@ -467,7 +430,7 @@ func TestDecodeTypes_UintSliceElemType(t *testing.T) {
 func TestDecodeTypes_Float64SliceElemType(t *testing.T) {
 	buf := gobEncode(t, Float64Slice{1.1, 2.2})
 	ins := gobspect.New()
-	vals, err := ins.Decode(buf)
+	vals, err := ins.Stream(buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 1)
 	sv, ok := vals[0].(gobspect.SliceValue)
@@ -480,7 +443,7 @@ func TestDecodeTypes_Float64SliceElemType(t *testing.T) {
 func TestDecodeTypes_ComplexSliceElemType(t *testing.T) {
 	buf := gobEncode(t, ComplexSlice{1 + 2i, 3 + 4i})
 	ins := gobspect.New()
-	vals, err := ins.Decode(buf)
+	vals, err := ins.Stream(buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 1)
 	sv, ok := vals[0].(gobspect.SliceValue)
@@ -503,7 +466,7 @@ type SliceOfSlice []IntSlice
 func TestWireTypeDefName_SliceT(t *testing.T) {
 	buf := gobEncode(t, SliceOfSlice{IntSlice{1, 2}, IntSlice{3, 4}})
 	ins := gobspect.New()
-	types, err := ins.DecodeTypes(buf)
+	types, err := decodeTypes(ins, buf)
 	require.NoError(t, err)
 
 	byName := make(map[string]gobspect.TypeInfo)
@@ -525,7 +488,7 @@ type SliceOfMap []StringMap
 func TestWireTypeDefName_MapT(t *testing.T) {
 	buf := gobEncode(t, SliceOfMap{StringMap{"a": 1}})
 	ins := gobspect.New()
-	types, err := ins.DecodeTypes(buf)
+	types, err := decodeTypes(ins, buf)
 	require.NoError(t, err)
 
 	byName := make(map[string]gobspect.TypeInfo)
@@ -547,7 +510,7 @@ type SliceOfArray []IntArray
 func TestWireTypeDefName_ArrayT(t *testing.T) {
 	buf := gobEncode(t, SliceOfArray{IntArray{1, 2, 3, 4}})
 	ins := gobspect.New()
-	types, err := ins.DecodeTypes(buf)
+	types, err := decodeTypes(ins, buf)
 	require.NoError(t, err)
 
 	byName := make(map[string]gobspect.TypeInfo)
@@ -570,7 +533,7 @@ func TestWireTypeDefName_BinaryMarshalerT(t *testing.T) {
 	ts := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	buf := gobEncode(t, TimeSlice{ts})
 	ins := gobspect.New()
-	types, err := ins.DecodeTypes(buf)
+	types, err := decodeTypes(ins, buf)
 	require.NoError(t, err)
 
 	byName := make(map[string]gobspect.TypeInfo)
@@ -592,7 +555,7 @@ type BigIntSlice []*big.Int
 func TestWireTypeDefName_GobEncoderT(t *testing.T) {
 	buf := gobEncode(t, BigIntSlice{big.NewInt(42)})
 	ins := gobspect.New()
-	types, err := ins.DecodeTypes(buf)
+	types, err := decodeTypes(ins, buf)
 	require.NoError(t, err)
 
 	// The slice type must be present; its elem should reference the GobEncoder type.

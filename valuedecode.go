@@ -26,23 +26,10 @@ type valueDecoder struct {
 	ins      *Inspector
 	sd       *streamDecoder
 	registry map[int]wireTypeDef
-	depth    int // current composite nesting depth, for MaxDepth enforcement
 }
 
 func newValueDecoder(ins *Inspector, sd *streamDecoder) *valueDecoder {
 	return &valueDecoder{ins: ins, sd: sd, registry: sd.registry}
-}
-
-// checkDepth increments vd.depth, checks it against MaxDepth, and returns a
-// cleanup function that decrements it. Call as: defer vd.checkDepth(label)().
-// Returns an error (non-nil) only when the limit is exceeded.
-func (vd *valueDecoder) enterDepth(label string) error {
-	vd.depth++
-	if vd.ins.options.MaxDepth > 0 && vd.depth > vd.ins.options.MaxDepth {
-		vd.depth--
-		return fmt.Errorf("gob: max depth %d exceeded at %s", vd.ins.options.MaxDepth, label)
-	}
-	return nil
 }
 
 // decodeTopLevelValue decodes a top-level gob value from the message body.
@@ -188,13 +175,9 @@ func (vd *valueDecoder) decodeBytes(r io.ByteReader) (Value, error) {
 // uint delta (gap from the previous 0-based field index, starting from -1).
 // Zero-valued fields are omitted. A delta of 0 terminates the sequence.
 func (vd *valueDecoder) decodeStructValue(typeID int, def *wireStructType, r *messageReader) (Value, error) {
-	if err := vd.enterDepth("struct " + def.Common.Name); err != nil {
-		return nil, err
-	}
-	defer func() { vd.depth-- }()
 	sv := StructValue{
 		TypeName: def.Common.Name,
-		TypeID:   typeID,
+		GobTypeID: typeID,
 	}
 	fieldIdx := -1 // mirrors encoder's state.fieldnum, starts at -1
 	for {
@@ -228,10 +211,6 @@ func (vd *valueDecoder) decodeStructValue(typeID int, def *wireStructType, r *me
 // decodeSliceValue decodes a gob slice: uint(count) then each element.
 // Elements are encoded without field deltas — just their raw value encodings.
 func (vd *valueDecoder) decodeSliceValue(typeID int, def *wireSliceType, r *messageReader) (Value, error) {
-	if err := vd.enterDepth("slice " + def.Common.Name); err != nil {
-		return nil, err
-	}
-	defer func() { vd.depth-- }()
 	count, err := decodeUint(r)
 	if err != nil {
 		return nil, err
@@ -241,7 +220,7 @@ func (vd *valueDecoder) decodeSliceValue(typeID int, def *wireSliceType, r *mess
 	}
 	sv := SliceValue{
 		TypeName: def.Common.Name,
-		TypeID:   typeID,
+		GobTypeID: typeID,
 		ElemType: vd.typeLabel(def.Elem),
 		Elems:    make([]Value, count),
 	}
@@ -256,10 +235,6 @@ func (vd *valueDecoder) decodeSliceValue(typeID int, def *wireSliceType, r *mess
 
 // decodeMapValue decodes a gob map: uint(count) then alternating key/value pairs.
 func (vd *valueDecoder) decodeMapValue(typeID int, def *wireMapType, r *messageReader) (Value, error) {
-	if err := vd.enterDepth("map " + def.Common.Name); err != nil {
-		return nil, err
-	}
-	defer func() { vd.depth-- }()
 	count, err := decodeUint(r)
 	if err != nil {
 		return nil, err
@@ -269,7 +244,7 @@ func (vd *valueDecoder) decodeMapValue(typeID int, def *wireMapType, r *messageR
 	}
 	mv := MapValue{
 		TypeName: def.Common.Name,
-		TypeID:   typeID,
+		GobTypeID: typeID,
 		KeyType:  vd.typeLabel(def.Key),
 		ElemType: vd.typeLabel(def.Elem),
 		Entries:  make([]MapEntry, count),
@@ -291,10 +266,6 @@ func (vd *valueDecoder) decodeMapValue(typeID int, def *wireMapType, r *messageR
 // decodeArrayValue decodes a gob array: uint(count) then each element.
 // The count should equal def.Len but we decode whatever count is in the stream.
 func (vd *valueDecoder) decodeArrayValue(typeID int, def *wireArrayType, r *messageReader) (Value, error) {
-	if err := vd.enterDepth("array " + def.Common.Name); err != nil {
-		return nil, err
-	}
-	defer func() { vd.depth-- }()
 	count, err := decodeUint(r)
 	if err != nil {
 		return nil, err
@@ -304,7 +275,7 @@ func (vd *valueDecoder) decodeArrayValue(typeID int, def *wireArrayType, r *mess
 	}
 	av := ArrayValue{
 		TypeName: def.Common.Name,
-		TypeID:   typeID,
+		GobTypeID: typeID,
 		ElemType: vd.typeLabel(def.Elem),
 		Len:      def.Len,
 		Elems:    make([]Value, count),
@@ -337,6 +308,15 @@ func (vd *valueDecoder) decodeOpaqueValue(typeName, encoding string, r io.ByteRe
 	if encoding == "text" {
 		// TextMarshaler blobs are always valid UTF-8 strings by contract.
 		ov.Decoded = string(raw)
+	} else if typeName == "" {
+		// Empty type name: try anonymous decoders in registration order,
+		// stopping at the first one that returns a non-error result.
+		for _, dec := range vd.ins.anonymousDecoders {
+			if decoded, decErr := dec(raw); decErr == nil {
+				ov.Decoded = decoded
+				break
+			}
+		}
 	} else if dec, ok := vd.ins.decoders[typeName]; ok {
 		if decoded, decErr := dec(raw); decErr == nil {
 			ov.Decoded = decoded
@@ -359,10 +339,6 @@ func (vd *valueDecoder) decodeOpaqueValue(typeName, encoding string, r io.ByteRe
 // After this function returns, r is positioned at whatever bytes follow the
 // value in the stream (e.g. the struct terminator for the enclosing struct).
 func (vd *valueDecoder) decodeInterface(r *messageReader) (Value, error) {
-	if err := vd.enterDepth("interface"); err != nil {
-		return nil, err
-	}
-	defer func() { vd.depth-- }()
 	nameLen, err := decodeUint(r)
 	if err != nil {
 		return nil, err
@@ -414,17 +390,13 @@ func (vd *valueDecoder) decodeInterface(r *messageReader) (Value, error) {
 			break
 		}
 		// Negative: inline type def in the current message body.
-		// Read wireType body and register it.
+		// Read wireType body and register it with incremental resolution.
 		inlineID := int(-id)
 		def, defErr := decodeWireType(r)
 		if defErr != nil {
 			return nil, fmt.Errorf("gob: decoding inline wireType id %d for interface %q: %w", inlineID, typeName, defErr)
 		}
-		vd.sd.registry[inlineID] = def
-		// Populate sd.types so DecodeStream callers see all types.
-		if ti, tiErr := vd.sd.wireTypeToTypeInfo(inlineID, def); tiErr == nil {
-			vd.sd.types = append(vd.sd.types, ti)
-		}
+		_ = vd.sd.registerAndResolve(inlineID, def) // best-effort; decode continues on error
 	}
 
 	// The encoder prefixes the concrete value bytes with their length.

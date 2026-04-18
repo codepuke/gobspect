@@ -322,7 +322,6 @@ Limits can be set at construction time to bound resource use on untrusted input:
 
 ```go
 ins := gobspect.New(gobspect.WithOptions(gobspect.Options{
-    MaxDepth: 64,
     MaxBytes: 4 * 1024 * 1024, // 4 MiB
 }))
 ```
@@ -350,6 +349,14 @@ p, err := query.Parse("Orders.*.Customer.Name")
 if err != nil { ... }
 for _, root := range roots {
     names := query.AllPath(root, p)
+}
+```
+
+For lazy, streaming enumeration (early-break safe), use `query.AllPathSeq`:
+
+```go
+for v := range query.AllPathSeq(root, p) {
+    // process v; break at any time to stop early
 }
 ```
 

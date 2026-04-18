@@ -6,20 +6,25 @@
 // # Basic usage
 //
 //	ins := gobspect.New()
+//	stream := ins.Stream(r)
 //
-//	values, err := ins.Decode(r)
-//	if err != nil {
-//	    log.Fatal(err)
-//	}
-//
-//	for _, v := range values {
+//	for v, err := range stream.Values() {
+//	    if err != nil {
+//	        log.Fatal(err)
+//	    }
 //	    fmt.Println(gobspect.Format(v))
 //	}
 //
+//	// stream.Types() now contains every type encountered
+//
+// To collect all values at once:
+//
+//	values, err := ins.Stream(r).Collect()
+//
 // # Value AST
 //
-// [Decode] returns a []Value. Each [Value] is one of the concrete node types
-// listed below; use a type switch to dispatch on them:
+// [Stream.Values] returns an iterator over [Value] nodes. Each [Value] is one
+// of the concrete node types listed below; use a type switch to dispatch on them:
 //
 //   - [StructValue] — a gob struct with named [Field] entries
 //   - [MapValue] — a gob map with [MapEntry] key/value pairs
@@ -36,9 +41,27 @@
 //
 // # Type metadata
 //
-// [DecodeTypes] returns [TypeInfo] for every type definition in the stream
-// without decoding values. [DecodeStream] returns both type definitions and
-// values together in a [StreamResult], which includes partial results on error.
+// [Stream.Types] returns [TypeInfo] for every type definition in the stream as
+// the stream is consumed. By the time a value is yielded by [Stream.Values],
+// all type definitions it references are already present in [Stream.Types] and
+// all [TypeRef.Name] fields are resolved. [Stream.TypeByID] provides O(1) lookup
+// by stream-scoped type ID.
+//
+// [Stream.Schema] drains the stream and returns all type definitions formatted
+// as a [Schema].
+//
+// # Looking up types during iteration
+//
+//	stream := ins.Stream(r)
+//	for v, err := range stream.Values() {
+//	    if err != nil { log.Fatal(err) }
+//	    sv, ok := v.(gobspect.StructValue)
+//	    if !ok { continue }
+//	    ti, ok := stream.TypeByID(sv.TypeID())
+//	    if ok {
+//	        fmt.Printf("type %s has %d fields\n", ti.Name, len(ti.Fields))
+//	    }
+//	}
 //
 // # Opaque types
 //
@@ -49,23 +72,30 @@
 //   - math/big.Int and math/big.Rat (auto-detected)
 //   - UUID types from github.com/google/uuid and github.com/gofrs/uuid
 //
-// Additional decoders can be registered with [Inspector.RegisterDecoder].
+// Additional decoders can be registered with [Inspector.RegisterDecoder],
+// which accepts a [DecoderFunc] (the [OpaqueDecoder] alias also works).
 // TextMarshaler blobs are always decoded as UTF-8 strings automatically.
 //
 // # Formatting
 //
-// [Format] renders any [Value] as a human-readable string. Structs are always
-// indented; maps, slices, and arrays are inlined when short (≤72 chars) and
-// indented otherwise. Map entries are sorted by key for deterministic output.
+// [Format] renders any [Value] as a human-readable string. [FormatTo] writes
+// the same output to an [io.Writer] and propagates write errors. Structs are
+// always indented; maps, slices, and arrays are inlined when short (≤72 chars)
+// and indented otherwise. Map entries are sorted by key for deterministic output.
 // Use [WithIndent], [WithMaxBytes], and [WithRawOpaques] to adjust the output.
 //
 // # Decoding limits
 //
-// Pass [WithOptions] to [New] to set a maximum recursion depth ([Options.MaxDepth])
-// or a maximum byte limit ([Options.MaxBytes]):
+// Pass [WithOptions] to [New] to set a maximum byte limit ([Options.MaxBytes]):
 //
 //	ins := gobspect.New(gobspect.WithOptions(gobspect.Options{
-//	    MaxDepth: 64,
 //	    MaxBytes: 10 << 20, // 10 MiB
 //	}))
+//
+// # Path-based navigation
+//
+// The companion subpackage github.com/codepuke/gobspect/query provides
+// path-based navigation of decoded Value trees. Use query.AllPathSeq for
+// lazy, streaming enumeration of matching values (early-break safe), or
+// query.AllPath to collect all matches into a slice.
 package gobspect

@@ -59,11 +59,13 @@ func FuzzDecode(f *testing.F) {
 	ins := gobspect.New()
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		ins.Decode(bytes.NewReader(data))      //nolint:errcheck
-		ins.DecodeTypes(bytes.NewReader(data)) //nolint:errcheck
+		// Exercise Collect (drains stream, returns values).
+		ins.Stream(bytes.NewReader(data)).Collect() //nolint:errcheck
+		// Exercise Schema (drains stream, returns types).
+		ins.Stream(bytes.NewReader(data)).Schema() //nolint:errcheck
 
 		// Exercise the Values iterator path directly.
-		for _, err := range ins.Values(bytes.NewReader(data)) { //nolint:errcheck
+		for _, err := range ins.Stream(bytes.NewReader(data)).Values() { //nolint:errcheck
 			_ = err
 		}
 	})

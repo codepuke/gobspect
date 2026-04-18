@@ -1,8 +1,6 @@
 package gobspect_test
 
 import (
-	"bytes"
-	"encoding/gob"
 	"encoding/json"
 	"testing"
 	"time"
@@ -18,7 +16,7 @@ func decodeFirst(tb testing.TB, v any) gobspect.Value {
 	tb.Helper()
 	buf := gobEncode(tb, v)
 	ins := gobspect.New()
-	vals, err := ins.Decode(buf)
+	vals, err := ins.Stream(buf).Collect()
 	require.NoError(tb, err)
 	require.Len(tb, vals, 1)
 	return vals[0]
@@ -148,8 +146,8 @@ func TestToJSON_Kinds(t *testing.T) {
 		{
 			name: "struct",
 			value: gobspect.StructValue{
-				TypeName: "MyStruct",
-				TypeID:   42,
+				TypeName:  "MyStruct",
+				GobTypeID: 42,
 				Fields: []gobspect.Field{
 					{Name: "X", Value: gobspect.IntValue{V: 1}},
 					{Name: "Y", Value: gobspect.StringValue{V: "hi"}},
@@ -171,8 +169,8 @@ func TestToJSON_Kinds(t *testing.T) {
 		{
 			name: "map",
 			value: gobspect.MapValue{
-				TypeName: "M",
-				TypeID:   5,
+				TypeName:  "M",
+				GobTypeID: 5,
 				KeyType:  "string",
 				ElemType: "int",
 				Entries: []gobspect.MapEntry{
@@ -194,8 +192,8 @@ func TestToJSON_Kinds(t *testing.T) {
 		{
 			name: "slice",
 			value: gobspect.SliceValue{
-				TypeName: "S",
-				TypeID:   3,
+				TypeName:  "S",
+				GobTypeID: 3,
 				ElemType: "int",
 				Elems:    []gobspect.Value{gobspect.IntValue{V: 10}, gobspect.IntValue{V: 20}},
 			},
@@ -209,8 +207,8 @@ func TestToJSON_Kinds(t *testing.T) {
 		{
 			name: "array",
 			value: gobspect.ArrayValue{
-				TypeName: "A",
-				TypeID:   4,
+				TypeName:  "A",
+				GobTypeID: 4,
 				ElemType: "int",
 				Len:      3,
 				Elems:    []gobspect.Value{gobspect.IntValue{V: 1}, gobspect.IntValue{V: 2}, gobspect.IntValue{V: 3}},
@@ -259,53 +257,6 @@ func TestToJSON_RealGobStruct(t *testing.T) {
 	nameVal := f0["value"].(map[string]any)
 	assert.Equal(t, "string", nameVal["kind"])
 	assert.Equal(t, "Alice", nameVal["v"])
-}
-
-// — StreamResult.MarshalJSON ——————————————————————————————————————————————————
-
-func TestStreamResult_MarshalJSON(t *testing.T) {
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	require.NoError(t, enc.Encode(jsonTestStruct{Name: "Bob", Score: 42}))
-
-	ins := gobspect.New()
-	result := ins.DecodeStream(&buf)
-	require.NoError(t, result.Err)
-
-	b, err := json.Marshal(result)
-	require.NoError(t, err)
-
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(b, &m))
-
-	assert.Nil(t, m["error"])
-
-	types, ok := m["types"].([]any)
-	require.True(t, ok)
-	assert.NotEmpty(t, types)
-
-	values, ok := m["values"].([]any)
-	require.True(t, ok)
-	require.Len(t, values, 1)
-
-	v := values[0].(map[string]any)
-	assert.Equal(t, "struct", v["kind"])
-}
-
-func TestStreamResult_MarshalJSON_WithError(t *testing.T) {
-	// Corrupt stream triggers an error; StreamResult.Err should appear as a string.
-	buf := bytes.NewReader([]byte{0xff, 0xff, 0xff, 0xff})
-	ins := gobspect.New()
-	result := ins.DecodeStream(buf)
-
-	b, err := json.Marshal(result)
-	require.NoError(t, err)
-
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(b, &m))
-	assert.NotNil(t, m["error"])
-	_, isString := m["error"].(string)
-	assert.True(t, isString, "error field should be a string")
 }
 
 // — OpaqueValue.Decoded normalization ————————————————————————————————————————

@@ -111,6 +111,9 @@ func (p Path) String() string {
 	return b.String()
 }
 
+// IsEmpty reports whether the path has no segments (identity path).
+func (p Path) IsEmpty() bool { return len(p.segs) == 0 }
+
 // Parse compiles a dot-separated path expression into a [Path].
 // Returns a [*ParseError] if the expression is syntactically invalid.
 //
@@ -291,18 +294,31 @@ func parseDescentAt(expr string, pos int) (segment, int, error) {
 // parseToken converts a raw token string to a segment.
 // Returns (segment{}, false) for tokens that cannot be parsed.
 func parseToken(token string) (segment, bool) {
-	// Check for comma-separated projection (e.g. "SKU,Price").
+	// Check for comma-separated projection (e.g. "SKU,Price" or "SKU,Address/Zip").
 	if strings.Contains(token, ",") {
 		parts := strings.Split(token, ",")
 		fields := make([]string, 0, len(parts))
+		leafSeen := make(map[string]bool, len(parts))
 		for _, p := range parts {
 			f := strings.TrimSpace(p)
 			if f == "" {
 				return segment{}, false
 			}
-			if strings.ContainsAny(f, ".[]!=~<>|* ") {
-				return segment{}, false
+			// Validate each /‑separated component individually.
+			components := strings.Split(f, "/")
+			for _, c := range components {
+				if c == "" {
+					return segment{}, false // leading, trailing, or double slash
+				}
+				if strings.ContainsAny(c, ".[]!=~<>|* /") {
+					return segment{}, false
+				}
 			}
+			leaf := components[len(components)-1]
+			if leafSeen[leaf] {
+				return segment{}, false // duplicate column name
+			}
+			leafSeen[leaf] = true
 			fields = append(fields, f)
 		}
 		return segment{kind: segProject, projectFields: fields}, true

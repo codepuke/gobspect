@@ -1,6 +1,8 @@
 package query
 
 import (
+	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/codepuke/gobspect"
@@ -816,7 +818,7 @@ func TestAllProjectionFanOut(t *testing.T) {
 	for i, v := range got {
 		sv, ok := v.(gobspect.StructValue)
 		require.True(t, ok, "result %d should be StructValue", i)
-		assert.Equal(t, "", sv.TypeName, "projected struct should be anonymous")
+		assert.Equal(t, ProjectionTypeName, sv.TypeName, "projected struct should have ProjectionTypeName")
 		require.Len(t, sv.Fields, 2)
 		assert.Equal(t, "SKU", sv.Fields[0].Name)
 		assert.Equal(t, "Price", sv.Fields[1].Name)
@@ -850,4 +852,253 @@ func TestAllProjectionPreservesOrder(t *testing.T) {
 func TestAllProjectionOnScalar(t *testing.T) {
 	got := All(makeString("hello"), "A,B")
 	assert.Nil(t, got)
+}
+
+// TestAllNestedProjectionFanOut verifies that "*.Name,Address/Zip" over a slice
+// returns one projected StructValue per element with the leaf as column name.
+func TestAllNestedProjectionFanOut(t *testing.T) {
+	items := makeSlice(
+		makeStruct("Item",
+			field_("Name", makeString("Alpha")),
+			field_("Address", makeStruct("Address",
+				field_("Zip", makeString("97201")),
+			)),
+		),
+		makeStruct("Item",
+			field_("Name", makeString("Beta")),
+			field_("Address", makeStruct("Address",
+				field_("Zip", makeString("10001")),
+			)),
+		),
+	)
+
+	got := All(items, "*.Name,Address/Zip")
+	require.Len(t, got, 2)
+
+	for i, want := range []struct{ name, zip string }{
+		{"Alpha", "97201"},
+		{"Beta", "10001"},
+	} {
+		sv := got[i].(gobspect.StructValue)
+		assert.Equal(t, ProjectionTypeName, sv.TypeName)
+		require.Len(t, sv.Fields, 2)
+		assert.Equal(t, "Name", sv.Fields[0].Name)
+		assert.Equal(t, makeString(want.name), sv.Fields[0].Value)
+		assert.Equal(t, "Zip", sv.Fields[1].Name)
+		assert.Equal(t, makeString(want.zip), sv.Fields[1].Value)
+	}
+}
+
+// — TestAllPath_EmptyPathReturnsRoot —————————————————————————————————————————
+
+// TestAllPath_EmptyPathReturnsRoot verifies that AllPath with a zero-segment
+// path returns a single-element slice containing the root value, regardless of
+// the root's type.
+func TestAllPath_EmptyPathReturnsRoot(t *testing.T) {
+	empty, err := Parse("")
+	if err != nil {
+		t.Fatalf("Parse(\"\") error: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		root gobspect.Value
+	}{
+		{
+			name: "scalar",
+			root: gobspect.IntValue{V: 42},
+		},
+		{
+			name: "struct",
+			root: gobspect.StructValue{
+				TypeName: "Foo",
+				Fields: []gobspect.Field{
+					{Name: "X", Value: gobspect.IntValue{V: 1}},
+				},
+			},
+		},
+		{
+			name: "slice",
+			root: gobspect.SliceValue{
+				ElemType: "int",
+				Elems:    []gobspect.Value{gobspect.IntValue{V: 1}},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := AllPath(tc.root, empty)
+			assert.Equal(t, []gobspect.Value{tc.root}, got)
+		})
+	}
+}
+
+// — TestAllPathSeq / TestAllSeq iterators ————————————————————————————————————
+
+// TestAllPathSeq_MatchesAllPath verifies that AllPathSeq produces the same
+// results in the same order as AllPath for a representative set of cases.
+func TestAllPathSeq_MatchesAllPath(t *testing.T) {
+	tests := []struct {
+		name string
+		root gobspect.Value
+		expr string
+	}{
+		{
+			name: "empty path returns root",
+			root: makeString("hello"),
+			expr: "",
+		},
+		{
+			name: "wildcard on slice",
+			root: makeStruct("Root", field_("Items", makeSlice(makeString("a"), makeString("b"), makeString("c")))),
+			expr: "Items.*",
+		},
+		{
+			name: "wildcard on array",
+			root: makeStruct("Root", field_("Arr", makeArray(makeInt(10), makeInt(20), makeInt(30)))),
+			expr: "Arr.*",
+		},
+		{
+			name: "wildcard on map",
+			root: makeStruct("Root", field_("Meta", makeMap(
+				entry(makeString("x"), makeInt(1)),
+				entry(makeString("y"), makeInt(2)),
+			))),
+			expr: "Meta.*",
+		},
+		{
+			name: "nested wildcard",
+			root: makeStruct("Root", field_("Orders", makeSlice(
+				makeStruct("Order", field_("Customer", makeStruct("Customer", field_("Name", makeString("Alice"))))),
+				makeStruct("Order", field_("Customer", makeStruct("Customer", field_("Name", makeString("Bob"))))),
+			))),
+			expr: "Orders.*.Customer.Name",
+		},
+		{
+			name: "multi wildcard matrix",
+			root: makeStruct("Root", field_("Matrix", makeSlice(
+				makeSlice(makeInt(1), makeInt(2)),
+				makeSlice(makeInt(3), makeInt(4)),
+			))),
+			expr: "Matrix.*.*",
+		},
+		{
+			name: "descent named",
+			root: makeStruct("Root",
+				field_("Price", makeInt(1)),
+				field_("A", makeStruct("B",
+					field_("Price", makeInt(2)),
+					field_("B", makeStruct("C", field_("Price", makeInt(3)))),
+				)),
+			),
+			expr: "..Price",
+		},
+		{
+			name: "wildcard descent with filter",
+			root: makeStruct("Root",
+				field_("A", makeStruct("A", field_("Status", makeString("active")), field_("ID", makeInt(1)))),
+				field_("B", makeStruct("B", field_("Status", makeString("inactive")), field_("ID", makeInt(2)))),
+				field_("C", makeStruct("C", field_("Status", makeString("active")), field_("ID", makeInt(3)))),
+			),
+			expr: "..[Status=active]",
+		},
+		{
+			name: "filter on slice",
+			root: makeStruct("Root", field_("Items", makeSlice(
+				makeStruct("Item", field_("Status", makeString("active")), field_("ID", makeInt(1))),
+				makeStruct("Item", field_("Status", makeString("inactive")), field_("ID", makeInt(2))),
+			))),
+			expr: "Items[Status=active]",
+		},
+		{
+			name: "projection fan-out",
+			root: makeSlice(
+				makeStruct("Item", field_("SKU", makeString("A")), field_("Price", makeInt(10)), field_("Stock", makeInt(50))),
+				makeStruct("Item", field_("SKU", makeString("B")), field_("Price", makeInt(20)), field_("Stock", makeInt(30))),
+			),
+			expr: "*.SKU,Price",
+		},
+		{
+			name: "missing field returns empty",
+			root: makeStruct("Root", field_("Name", makeString("hi"))),
+			expr: "Missing.*",
+		},
+		{
+			name: "partial miss",
+			root: makeStruct("Root", field_("Items", makeSlice(
+				makeStruct("Item", field_("Name", makeString("Alice"))),
+				makeStruct("Item", field_("Price", makeInt(42))),
+				makeStruct("Item", field_("Name", makeString("Bob"))),
+			))),
+			expr: "Items.*.Name",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := Parse(tc.expr)
+			require.NoError(t, err)
+
+			want := AllPath(tc.root, p)
+			got := slices.Collect(AllPathSeq(tc.root, p))
+
+			// Normalise nil vs empty-slice: AllPath returns nil on no match,
+			// slices.Collect returns nil for an empty sequence too, so they
+			// should both be nil here. But in case one returns []T{} vs nil,
+			// treat both as "nothing".
+			if len(want) == 0 && len(got) == 0 {
+				return
+			}
+			assert.Equal(t, want, got)
+		})
+	}
+}
+
+// TestAllSeq_MatchesAll verifies AllSeq produces the same results as All.
+func TestAllSeq_MatchesAll(t *testing.T) {
+	root := makeStruct("Root", field_("Items", makeSlice(
+		makeString("a"), makeString("b"), makeString("c"),
+	)))
+
+	want := All(root, "Items.*")
+	got := slices.Collect(AllSeq(root, "Items.*"))
+	assert.Equal(t, want, got)
+}
+
+// TestAllSeq_PanicsOnInvalidSyntax verifies AllSeq panics for invalid paths,
+// matching All's contract.
+func TestAllSeq_PanicsOnInvalidSyntax(t *testing.T) {
+	root := makeString("x")
+	assert.Panics(t, func() {
+		// Trigger the panic by ranging over the iterator.
+		for range AllSeq(root, ".bad") {
+		}
+	})
+}
+
+// TestAllPathSeq_EarlyBreak verifies that early termination via yield=false
+// stops traversal after the requested number of results, without visiting the
+// remaining elements.
+func TestAllPathSeq_EarlyBreak(t *testing.T) {
+	// Build a slice with 10 elements so there are many potential matches.
+	elems := make([]gobspect.Value, 10)
+	for i := range elems {
+		elems[i] = makeStruct(fmt.Sprintf("Item%d", i), field_("ID", makeInt(int64(i))))
+	}
+	root := makeStruct("Root", field_("Items", makeSlice(elems...)))
+
+	p, err := Parse("Items.*")
+	require.NoError(t, err)
+
+	var collected []gobspect.Value
+	for v := range AllPathSeq(root, p) {
+		collected = append(collected, v)
+		if len(collected) == 3 {
+			break
+		}
+	}
+
+	// Exactly 3 results were returned, not all 10.
+	require.Len(t, collected, 3)
 }

@@ -460,6 +460,27 @@ func TestParseSuccess(t *testing.T) {
 			expr: "SKU, Price",
 			segs: []segment{projection("SKU", "Price")},
 		},
+		// Nested projection fields using "/" sub-path separator
+		{
+			name: "nested projection single field",
+			expr: "SKU,Address/Zip",
+			segs: []segment{projection("SKU", "Address/Zip")},
+		},
+		{
+			name: "nested projection three-level depth alongside flat field",
+			expr: "X,A/B/C",
+			segs: []segment{projection("X", "A/B/C")},
+		},
+		{
+			name: "nested projection after wildcard",
+			expr: "Items.*.SKU,Address/Zip",
+			segs: []segment{field("Items"), wildcard(), projection("SKU", "Address/Zip")},
+		},
+		{
+			name: "mixed flat and nested projection",
+			expr: "Name,Billing/Zip,Price",
+			segs: []segment{projection("Name", "Billing/Zip", "Price")},
+		},
 	}
 
 	for _, tt := range tests {
@@ -593,6 +614,32 @@ func TestParseErrors(t *testing.T) {
 		{
 			name:    "projection with double comma",
 			expr:    "SKU,,Price",
+			wantErr: "invalid segment",
+		},
+		// Nested projection error cases
+		{
+			name:    "nested projection empty component (trailing slash)",
+			expr:    "A,B/,C",
+			wantErr: "invalid segment",
+		},
+		{
+			name:    "nested projection empty component (leading slash)",
+			expr:    "A,/B,C",
+			wantErr: "invalid segment",
+		},
+		{
+			name:    "nested projection empty component (double slash)",
+			expr:    "A,B//C",
+			wantErr: "invalid segment",
+		},
+		{
+			name:    "nested projection duplicate leaf name",
+			expr:    "A/Zip,B/Zip",
+			wantErr: "invalid segment",
+		},
+		{
+			name:    "nested projection duplicate leaf collides with flat field",
+			expr:    "Zip,A/Zip",
 			wantErr: "invalid segment",
 		},
 		// Bool/numeric filter error cases
@@ -1185,4 +1232,31 @@ func TestNeedsQuotingStartsWithDoubleQuote(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, p2.segs, 1)
 	assert.Equal(t, `"hello"`, p2.segs[0].filterPattern)
+}
+
+// TestPath_IsEmpty verifies that IsEmpty returns true for the zero-value and
+// Parse("") result, and false for any path with segments.
+func TestPath_IsEmpty(t *testing.T) {
+	t.Run("zero value is empty", func(t *testing.T) {
+		var p Path
+		assert.True(t, p.IsEmpty())
+	})
+
+	t.Run("parsed empty string is empty", func(t *testing.T) {
+		p, err := Parse("")
+		require.NoError(t, err)
+		assert.True(t, p.IsEmpty())
+	})
+
+	t.Run("single segment is not empty", func(t *testing.T) {
+		p, err := Parse("Name")
+		require.NoError(t, err)
+		assert.False(t, p.IsEmpty())
+	})
+
+	t.Run("multi-segment path is not empty", func(t *testing.T) {
+		p, err := Parse("Customer.Name")
+		require.NoError(t, err)
+		assert.False(t, p.IsEmpty())
+	})
 }

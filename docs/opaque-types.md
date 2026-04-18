@@ -144,7 +144,7 @@ Registered decoders override built-in decoders for the same type name. The retur
 
 ## Decoder Contract
 
-An `OpaqueDecoder` function must:
+A `DecoderFunc` (or its `OpaqueDecoder` alias) must:
 
 - Not panic. Return errors for malformed input.
 - Not retain references to the input slice. Copy if needed.

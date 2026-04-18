@@ -9,7 +9,7 @@ gobspect/
 ├── decode.go          # Stream reader, message framing, type/value dispatch
 ├── valuedecode.go     # Value decoding: primitives, structs, maps, slices, arrays, opaques, interfaces
 ├── wire.go            # Wire format primitives
-├── registry.go        # OpaqueDecoder registry
+├── registry.go        # DecoderFunc registry
 ├── builtins.go        # Built-in opaque decoders
 ├── format.go          # Human-readable rendering of Value trees
 ├── decode_test.go     # Decode tests
@@ -26,19 +26,17 @@ The top-level entry point. Holds the opaque decoder registry and decoding option
 
 ```go
 type Inspector struct {
-    decoders map[string]OpaqueDecoder
+    decoders map[string]DecoderFunc
     options  Options
 }
 
 type Options struct {
-    // MaxDepth limits recursion depth for nested types. Zero means no limit.
-    MaxDepth int
     // MaxBytes limits total bytes read from the stream. Zero means no limit.
     MaxBytes int64
 }
 
 func New(opts ...Option) *Inspector
-func (ins *Inspector) RegisterDecoder(typeName string, dec OpaqueDecoder)
+func (ins *Inspector) RegisterDecoder(typeName string, dec DecoderFunc)
 func (ins *Inspector) Decode(r io.Reader) ([]Value, error)
 
 // Inspector-level options:
@@ -48,15 +46,18 @@ func WithTimeFormat(layout string) Option // re-registers time.Time decoder with
 
 `New()` returns an inspector with all built-in opaque decoders pre-registered. Users call `RegisterDecoder` to add or override decoders for application-specific types.
 
-### OpaqueDecoder
+### DecoderFunc
 
 ```go
-// OpaqueDecoder decodes the raw bytes of a GobEncoder, BinaryMarshaler, or
+// DecoderFunc decodes the raw bytes of a GobEncoder, BinaryMarshaler, or
 // TextMarshaler blob into a human-meaningful value.
 //
 // The returned value should be a simple Go type (string, int, float, map, etc.)
 // suitable for display. It does not need to reconstruct the original Go type.
-type OpaqueDecoder func(data []byte) (any, error)
+type DecoderFunc func(data []byte) (any, error)
+
+// OpaqueDecoder is kept for backward compatibility. New code should use DecoderFunc.
+type OpaqueDecoder = DecoderFunc
 ```
 
 ### Value AST
@@ -69,9 +70,9 @@ type Value interface {
 }
 
 type StructValue struct {
-    TypeName string  // from CommonType.Name, may be empty
-    TypeID   int     // wire type ID
-    Fields   []Field
+    TypeName  string  // from CommonType.Name, may be empty
+    GobTypeID int     // wire type ID; accessed via the TypeID() method
+    Fields    []Field
 }
 
 type Field struct {
@@ -80,11 +81,11 @@ type Field struct {
 }
 
 type MapValue struct {
-    TypeName string
-    TypeID   int
-    KeyType  string // descriptive label for the key type
-    ElemType string // descriptive label for the element type
-    Entries  []MapEntry
+    TypeName  string
+    GobTypeID int
+    KeyType   string // descriptive label for the key type
+    ElemType  string // descriptive label for the element type
+    Entries   []MapEntry
 }
 
 type MapEntry struct {
@@ -93,18 +94,18 @@ type MapEntry struct {
 }
 
 type SliceValue struct {
-    TypeName string
-    TypeID   int
-    ElemType string
-    Elems    []Value
+    TypeName  string
+    GobTypeID int
+    ElemType  string
+    Elems     []Value
 }
 
 type ArrayValue struct {
-    TypeName string
-    TypeID   int
-    ElemType string
-    Len      int
-    Elems    []Value
+    TypeName  string
+    GobTypeID int
+    ElemType  string
+    Len       int
+    Elems     []Value
 }
 
 type IntValue    struct{ V int64 }

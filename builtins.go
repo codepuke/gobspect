@@ -73,10 +73,10 @@ func decodeTime(data []byte) (any, error) {
 	return formatRFC3339(unixSec, nsec, offsetSec), nil
 }
 
-// makeTimeDecoder returns an OpaqueDecoder that parses a time.Time blob and
+// makeTimeDecoder returns a [DecoderFunc] that parses a time.Time blob and
 // formats the result using the given layout. If layout is empty,
 // time.RFC3339Nano is used.
-func makeTimeDecoder(layout string) OpaqueDecoder {
+func makeTimeDecoder(layout string) DecoderFunc {
 	if layout == "" {
 		layout = time.RFC3339Nano
 	}

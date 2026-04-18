@@ -847,7 +847,7 @@ func TestGetPathProjectionStruct(t *testing.T) {
 
 	sv, isSV := v.(gobspect.StructValue)
 	require.True(t, isSV, "projection should return a StructValue")
-	assert.Equal(t, "", sv.TypeName, "projected struct should be anonymous")
+	assert.Equal(t, ProjectionTypeName, sv.TypeName, "projected struct should have ProjectionTypeName")
 	require.Len(t, sv.Fields, 2)
 	assert.Equal(t, "SKU", sv.Fields[0].Name)
 	assert.Equal(t, makeString("ABC-123"), sv.Fields[0].Value)
@@ -922,10 +922,73 @@ func TestGetPathProjectionAfterWildcard(t *testing.T) {
 	require.True(t, ok, "Get should resolve *.SKU,Price")
 
 	sv := v.(gobspect.StructValue)
-	assert.Equal(t, "", sv.TypeName)
+	assert.Equal(t, ProjectionTypeName, sv.TypeName)
 	require.Len(t, sv.Fields, 2)
 	assert.Equal(t, "SKU", sv.Fields[0].Name)
 	assert.Equal(t, makeString("A"), sv.Fields[0].Value)
+}
+
+// TestGetNestedProjection verifies that a "/"-separated projection field
+// navigates into a nested struct and uses the leaf name as the column header.
+func TestGetNestedProjection(t *testing.T) {
+	root := makeStruct("Item",
+		field_("Name", makeString("Widget")),
+		field_("Address", makeStruct("Address",
+			field_("City", makeString("Portland")),
+			field_("Zip", makeString("97201")),
+		)),
+	)
+
+	v, ok := Get(root, "Name,Address/Zip")
+	require.True(t, ok)
+
+	sv := v.(gobspect.StructValue)
+	assert.Equal(t, ProjectionTypeName, sv.TypeName)
+	require.Len(t, sv.Fields, 2)
+	assert.Equal(t, "Name", sv.Fields[0].Name)
+	assert.Equal(t, makeString("Widget"), sv.Fields[0].Value)
+	assert.Equal(t, "Zip", sv.Fields[1].Name)
+	assert.Equal(t, makeString("97201"), sv.Fields[1].Value)
+}
+
+// TestGetNestedProjectionMissing verifies that a sub-path that does not exist
+// produces a NilValue for that column.
+func TestGetNestedProjectionMissing(t *testing.T) {
+	root := makeStruct("Item",
+		field_("Name", makeString("Widget")),
+	)
+
+	v, ok := Get(root, "Name,Address/Zip")
+	require.True(t, ok)
+
+	sv := v.(gobspect.StructValue)
+	require.Len(t, sv.Fields, 2)
+	assert.Equal(t, "Zip", sv.Fields[1].Name)
+	assert.Equal(t, gobspect.NilValue{}, sv.Fields[1].Value)
+}
+
+// TestGetNestedProjectionThreeLevels verifies three-level "/" navigation
+// within a projection alongside a flat field.
+func TestGetNestedProjectionThreeLevels(t *testing.T) {
+	root := makeStruct("Order",
+		field_("ID", makeInt(99)),
+		field_("Shipping", makeStruct("Shipping",
+			field_("Address", makeStruct("Address",
+				field_("Zip", makeString("10001")),
+			)),
+		)),
+	)
+
+	v, ok := Get(root, "ID,Shipping/Address/Zip")
+	require.True(t, ok)
+
+	sv := v.(gobspect.StructValue)
+	assert.Equal(t, ProjectionTypeName, sv.TypeName)
+	require.Len(t, sv.Fields, 2)
+	assert.Equal(t, "ID", sv.Fields[0].Name)
+	assert.Equal(t, makeInt(99), sv.Fields[0].Value)
+	assert.Equal(t, "Zip", sv.Fields[1].Name)
+	assert.Equal(t, makeString("10001"), sv.Fields[1].Value)
 }
 
 // TestSegStringProjectionCase verifies segString output for a segProject segment.

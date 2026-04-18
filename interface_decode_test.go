@@ -183,7 +183,7 @@ func TestDecodeInterface_MultipleConcreteTypes(t *testing.T) {
 	require.NoError(t, enc.Encode(CreatureHolder{Pet: Hound{Name: "Spot", Breed: "Dalmatian"}}))
 
 	ins := gobspect.New()
-	vals, err := ins.Decode(&buf)
+	vals, err := ins.Stream(&buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 3)
 
@@ -259,7 +259,7 @@ func TestDecodeInterface_CompositeConcreteType(t *testing.T) {
 	require.NoError(t, enc.Encode(val))
 
 	ins := gobspect.New()
-	vals, err := ins.Decode(&buf)
+	vals, err := ins.Stream(&buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 1)
 
@@ -312,7 +312,7 @@ func TestDecodeInterface_NilInterface(t *testing.T) {
 	require.NoError(t, enc.Encode(CreatureHolder{Pet: nil}))
 
 	ins := gobspect.New()
-	vals, err := ins.Decode(&buf)
+	vals, err := ins.Stream(&buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 1)
 
@@ -346,7 +346,7 @@ func TestDecodeInterface_MixedSequence(t *testing.T) {
 	require.NoError(t, enc.Encode(CreatureHolder{Pet: Feline{Name: "Mittens", Indoor: false}}))
 
 	ins := gobspect.New()
-	vals, err := ins.Decode(&buf)
+	vals, err := ins.Stream(&buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 4, "expected 4 decoded values")
 
@@ -393,7 +393,7 @@ func TestDecodeInterface_FrontLoadedTypeDefs(t *testing.T) {
 
 	// Baseline: original stream must decode without error.
 	ins := gobspect.New()
-	baseline, err := ins.Decode(bytes.NewReader(original))
+	baseline, err := ins.Stream(bytes.NewReader(original)).Collect()
 	require.NoError(t, err)
 	require.Len(t, baseline, 2, "baseline: expected 2 decoded values")
 
@@ -427,7 +427,7 @@ func TestDecodeInterface_FrontLoadedTypeDefs(t *testing.T) {
 	reordered := reassembleStream(append(typeDefs, values...))
 
 	ins2 := gobspect.New()
-	got, err := ins2.Decode(bytes.NewReader(reordered))
+	got, err := ins2.Stream(bytes.NewReader(reordered)).Collect()
 	require.NoError(t, err, "front-loaded stream should decode without error")
 	require.Len(t, got, len(baseline), "front-loaded stream should yield the same number of values")
 
@@ -480,7 +480,7 @@ func TestDecodeInterface_MalformedZeroLengthValue(t *testing.T) {
 	reordered := reassembleStream(msgs)
 
 	ins := gobspect.New()
-	_, err := ins.Decode(bytes.NewReader(reordered))
+	_, err := ins.Stream(bytes.NewReader(reordered)).Collect()
 	require.Error(t, err)
 	require.ErrorContains(t, err, "has zero-length value body")
 }

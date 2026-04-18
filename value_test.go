@@ -44,7 +44,7 @@ func decode(tb testing.TB, v any) []gobspect.Value {
 	tb.Helper()
 	buf := gobEncode(tb, v)
 	ins := gobspect.New()
-	vals, err := ins.Decode(buf)
+	vals, err := ins.Stream(buf).Collect()
 	require.NoError(tb, err)
 	require.Len(tb, vals, 1)
 	return vals
@@ -230,7 +230,7 @@ func TestDecode_Array(t *testing.T) {
 func TestDecode_MultipleValues(t *testing.T) {
 	buf := gobEncodeMultiple(t, Point{1, 2}, Point{3, 4})
 	ins := gobspect.New()
-	vals, err := ins.Decode(buf)
+	vals, err := ins.Stream(buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 2)
 	assert.Equal(t, int64(1), vals[0].(gobspect.StructValue).Fields[0].Value.(gobspect.IntValue).V)
@@ -274,7 +274,7 @@ func TestDecode_InterfaceNonNil(t *testing.T) {
 func TestDecode_GobEncoder(t *testing.T) {
 	buf := gobEncode(t, &gobEncoderType{S: "hello"})
 	ins := gobspect.New()
-	vals, err := ins.Decode(buf)
+	vals, err := ins.Stream(buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 1)
 	ov, ok := vals[0].(gobspect.OpaqueValue)
@@ -286,7 +286,7 @@ func TestDecode_GobEncoder(t *testing.T) {
 func TestDecode_BinaryMarshaler(t *testing.T) {
 	buf := gobEncode(t, &binaryType{S: "world"})
 	ins := gobspect.New()
-	vals, err := ins.Decode(buf)
+	vals, err := ins.Stream(buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 1)
 	ov, ok := vals[0].(gobspect.OpaqueValue)
@@ -300,7 +300,7 @@ func TestDecode_TextMarshaler(t *testing.T) {
 	// that implement TextMarshaler are encoded as plain structs.
 	buf := gobEncode(t, &textType{S: "text!"})
 	ins := gobspect.New()
-	vals, err := ins.Decode(buf)
+	vals, err := ins.Stream(buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 1)
 	sv, ok := vals[0].(gobspect.StructValue)
@@ -313,13 +313,13 @@ func TestDecode_TextMarshaler(t *testing.T) {
 func TestDecode_OpaqueWithRegisteredDecoder(t *testing.T) {
 	// When a GobEncoder is encoded directly (not via interface), gob sends an
 	// empty CommonType.Name in the wireType. The OpaqueValue.TypeName is therefore
-	// ""; register the decoder under that key.
+	// ""; register an anonymous decoder to handle these opaques.
 	buf := gobEncode(t, &gobEncoderType{S: "decoded"})
 	ins := gobspect.New()
-	ins.RegisterDecoder("", func(data []byte) (any, error) {
+	ins.RegisterAnonymousDecoder(func(data []byte) (any, error) {
 		return "got:" + string(data), nil
 	})
-	vals, err := ins.Decode(buf)
+	vals, err := ins.Stream(buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 1)
 	ov := vals[0].(gobspect.OpaqueValue)
@@ -331,7 +331,7 @@ func TestDecode_OpaqueWithRegisteredDecoder(t *testing.T) {
 
 func TestDecode_EmptyStream(t *testing.T) {
 	ins := gobspect.New()
-	vals, err := ins.Decode(bytes.NewReader(nil))
+	vals, err := ins.Stream(bytes.NewReader(nil)).Collect()
 	require.NoError(t, err)
 	assert.Empty(t, vals)
 }

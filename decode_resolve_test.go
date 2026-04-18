@@ -1,20 +1,19 @@
 package gobspect
 
-// Tests for the resolveAllRefs invariant on Values.
+// Tests for incremental TypeRef name resolution.
 //
-// Background: DecodeStream and DecodeTypes both call sd.resolveAllRefs() after
-// iteration completes, filling in TypeRef.Name for any forward-declared types
-// (the gob encoder sends outer composite types before inner element types).
-// Values previously skipped this step, leaving sd.types in a partially-resolved
-// state that would be observable to any future API built on top of it.
-//
-// The fix: Values wraps the iterate result so that resolveAllRefs runs on both
-// normal termination and early break.
+// With the old resolveAllRefs approach, TypeRef.Name was filled in at
+// end-of-stream. With registerAndResolve, names are back-filled inline as each
+// new type definition is processed. The tests here verify:
+//  1. When a forward reference exists (slice defined before its element struct),
+//     Elem.Name starts empty and is back-filled as soon as the struct def arrives.
+//  2. The observable stream-level invariant: by the time a value is yielded,
+//     all TypeRefs in Types() are resolved.
 
 import (
 	"bytes"
 	"encoding/gob"
-	"iter"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,33 +21,12 @@ import (
 )
 
 // resolveTestPt and resolveTestPtSlice are package-level types so that gob
-// assigns them stable, non-empty names ("resolveTestPt", "resolveTestPtSlice").
-// When encoded, gob emits the slice type definition before the element struct
-// definition, producing a stream with a forward reference in the Elem TypeRef.
+// assigns them stable, non-empty names. When encoded, gob emits the slice type
+// definition before the element struct definition, producing a stream with a
+// forward reference in the Elem TypeRef.
 type resolveTestPt struct{ X, Y int }
 type resolveTestPtSlice []resolveTestPt
 
-// valuesAndTypes is an internal test helper that replicates the Values iterator
-// body but also returns the underlying streamDecoder, allowing tests to inspect
-// sd.types (including TypeRef.Name resolution) after iteration completes.
-//
-// It mirrors Values exactly — including the resolveAllRefs wrapper added by the
-// fix — so the assertions are meaningful regression guards: if Values is changed
-// to skip resolveAllRefs, this helper (and the test) must be updated to match.
-func (ins *Inspector) valuesAndTypes(r byteReadReader) (iter.Seq2[Value, error], *streamDecoder) {
-	sd := newStreamDecoder(wrapWithLimit(r, ins.options.MaxBytes))
-	vd := newValueDecoder(ins, sd)
-	seq := iterate(sd, vd)
-	wrapped := func(yield func(Value, error) bool) {
-		seq(yield)
-		sd.resolveAllRefs()
-	}
-	return wrapped, sd
-}
-
-// encodeResolveStream returns a buffer with a single resolveTestPtSlice value.
-// The stream contains a forward reference: gob emits the slice type before the
-// element struct type, so resolveTestPtSlice.Elem.Name starts empty.
 func encodeResolveStream(tb testing.TB) *bytes.Buffer {
 	tb.Helper()
 	var buf bytes.Buffer
@@ -57,55 +35,70 @@ func encodeResolveStream(tb testing.TB) *bytes.Buffer {
 	return &buf
 }
 
-// findSliceTypeInfo returns the first KindSlice entry in types, or nil.
-func findSliceTypeInfo(types []TypeInfo) *TypeInfo {
-	for i := range types {
-		if types[i].Kind == KindSlice {
-			return &types[i]
-		}
-	}
-	return nil
+// TestStream_IncrementalNameResolution directly exercises the registerAndResolve
+// helper by constructing artificial wireTypeDefs (no gob stream needed).
+// It verifies that:
+//   - Adding a slice of an unknown type leaves Elem.Name empty.
+//   - Adding the element type back-fills Elem.Name in the slice TypeInfo.
+func TestStream_IncrementalNameResolution(t *testing.T) {
+	sd := newStreamDecoder(strings.NewReader(""))
+
+	// Register type 65: a slice whose Elem (type 66) is not yet known.
+	sliceDef := wireTypeDef{SliceT: &wireSliceType{
+		Common: wireCommonType{Name: "[]TestPoint"},
+		Elem:   66,
+	}}
+	require.NoError(t, sd.registerAndResolve(65, sliceDef))
+
+	require.Len(t, sd.types, 1)
+	require.NotNil(t, sd.types[0].Elem)
+	assert.Equal(t, "", sd.types[0].Elem.Name, "Elem.Name should be empty before type 66 is defined")
+
+	// Register type 66: the struct that type 65 references.
+	structDef := wireTypeDef{StructT: &wireStructType{
+		Common: wireCommonType{Name: "TestPoint"},
+		Fields: []wireFieldType{{Name: "X", ID: 2}, {Name: "Y", ID: 2}},
+	}}
+	require.NoError(t, sd.registerAndResolve(66, structDef))
+
+	require.Len(t, sd.types, 2)
+	assert.Equal(t, "TestPoint", sd.types[0].Elem.Name,
+		"Elem.Name should be back-filled after type 66 is registered")
 }
 
-// TestValues_ElemRefResolvedAfterIteration verifies that the Values iterator
-// calls resolveAllRefs on completion so that TypeRef.Name fields in sd.types are
-// populated for forward-referenced types (gob emits outer composite types before
-// their element types, so elem refs are initially empty).
-func TestValues_ElemRefResolvedAfterIteration(t *testing.T) {
+// TestStream_ElemRefResolvedByValueYield verifies the stream-level invariant:
+// when Values() yields a value, all TypeRef.Name fields in Types() are resolved.
+func TestStream_ElemRefResolvedByValueYield(t *testing.T) {
 	t.Run("NormalCompletion", func(t *testing.T) {
 		buf := encodeResolveStream(t)
 		ins := New()
-		seq, sd := ins.valuesAndTypes(buf)
+		stream := ins.Stream(buf)
 
-		// Drain the iterator to completion.
-		for range seq {
+		for _, err := range stream.Values() {
+			require.NoError(t, err)
+			// Check resolution after the value is yielded.
+			for _, ti := range stream.Types() {
+				if ti.Elem != nil {
+					assert.NotEmpty(t, ti.Elem.Name, "Elem.Name should be resolved when value is yielded")
+				}
+			}
 		}
-
-		ti := findSliceTypeInfo(sd.types)
-		require.NotNil(t, ti, "KindSlice TypeInfo not found in sd.types")
-		require.NotNil(t, ti.Elem)
-		// Fails before fix: Elem.Name == "" because resolveAllRefs was not called.
-		assert.Equal(t, "resolveTestPt", ti.Elem.Name,
-			"Elem.Name should be resolved after Values iterator completes")
 	})
 
 	t.Run("EarlyBreak", func(t *testing.T) {
-		// Type definitions precede values in a gob stream, so all type defs have
-		// been processed before the first value is yielded. An early break therefore
-		// still has a full registry, and resolveAllRefs should resolve all refs.
 		buf := encodeResolveStream(t)
 		ins := New()
-		seq, sd := ins.valuesAndTypes(buf)
+		stream := ins.Stream(buf)
 
-		// Break immediately after the first value.
-		for range seq {
+		for _, err := range stream.Values() {
+			require.NoError(t, err)
 			break
 		}
 
-		ti := findSliceTypeInfo(sd.types)
-		require.NotNil(t, ti, "KindSlice TypeInfo not found in sd.types")
-		require.NotNil(t, ti.Elem)
-		assert.Equal(t, "resolveTestPt", ti.Elem.Name,
-			"Elem.Name should be resolved even after early break")
+		for _, ti := range stream.Types() {
+			if ti.Elem != nil {
+				assert.NotEmpty(t, ti.Elem.Name, "Elem.Name should be resolved even after early break")
+			}
+		}
 	})
 }

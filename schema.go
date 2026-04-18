@@ -2,6 +2,7 @@ package gobspect
 
 import (
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 )
@@ -75,7 +76,30 @@ func FormatSchema(types []TypeInfo, opts ...FormatOption) *Schema {
 // String renders the Schema as a human-readable Go-style type declaration block,
 // matching the original plain-text formatting exactly.
 func (s *Schema) String() string {
-	return s.FormatString(s.Indent)
+	return s.Format()
+}
+
+// Format renders the Schema as a string, applying any provided FormatOptions.
+// Currently only [WithColor] and [WithIndent] are respected; other options are
+// silently ignored. A zero-valued [ColorScheme] (the default) produces plain
+// text identical to [Schema.String].
+func (s *Schema) Format(opts ...FormatOption) string {
+	var sb strings.Builder
+	_ = s.FormatTo(&sb, opts...)
+	return sb.String()
+}
+
+// FormatTo renders the Schema to w. The first write error aborts rendering and
+// is returned. Currently only [WithColor] and [WithIndent] are respected.
+func (s *Schema) FormatTo(w io.Writer, opts ...FormatOption) error {
+	cfg := &formatConfig{indent: s.Indent}
+	if cfg.indent == "" {
+		cfg.indent = "  "
+	}
+	for _, o := range opts {
+		o(cfg)
+	}
+	return schemaFormatTo(w, s, cfg)
 }
 
 // TypeByName locates a top-level type declaration by its name.
@@ -88,18 +112,40 @@ func (s *Schema) TypeByName(name string) (*TypeDecl, bool) {
 	return nil, false
 }
 
-// FormatString respects custom indentation.
+// FormatString renders the schema with the given indentation string.
+// Deprecated: prefer [Schema.Format] with [WithIndent].
 func (s *Schema) FormatString(indent string) string {
-	var sb strings.Builder
+	if indent == "" {
+		indent = "  "
+	}
+	return s.Format(WithIndent(indent))
+}
+
+// schemaFormatTo writes the Schema to w using the given formatConfig for indent
+// and color options.
+func schemaFormatTo(w io.Writer, s *Schema, cfg *formatConfig) error {
+	indent := cfg.indent
+	clr := cfg.color
+
+	// keyword wraps a keyword token (e.g. "type") in the TypeHeader style.
+	// In the schema, we use TypeHeader for the "type" keyword and for the
+	// type name. We reuse OpaquePrefix (dim) for comments/annotations.
+
 	for i, t := range s.Types {
 		if i > 0 {
-			sb.WriteString("\n\n")
+			if _, err := io.WriteString(w, "\n\n"); err != nil {
+				return err
+			}
 		}
-		
+
 		switch t.Kind {
 		case KindStruct:
 			if len(t.Fields) == 0 {
-				sb.WriteString("type " + t.Name + " struct{}")
+				_, err := io.WriteString(w,
+					clr.Number.apply("type")+" "+clr.TypeHeader.apply(t.Name)+" struct{}")
+				if err != nil {
+					return err
+				}
 				continue
 			}
 
@@ -111,32 +157,46 @@ func (s *Schema) FormatString(indent string) string {
 				}
 			}
 
-			sb.WriteString("type ")
-			sb.WriteString(t.Name)
-			sb.WriteString(" struct {\n")
-			for _, f := range t.Fields {
-				sb.WriteString(indent)
-				sb.WriteString(f.Name)
-				// Pad so all type expressions start at the same column (maxLen + 2 spaces).
-				sb.WriteString(strings.Repeat(" ", maxLen-len(f.Name)+2))
-				sb.WriteString(f.Type)
-				if f.Annotation != "" {
-					sb.WriteString("  // ")
-					sb.WriteString(f.Annotation)
-				}
-				sb.WriteString("\n")
+			line := clr.Number.apply("type") + " " + clr.TypeHeader.apply(t.Name) + " struct {\n"
+			if _, err := io.WriteString(w, line); err != nil {
+				return err
 			}
-			sb.WriteString("}")
+			for _, f := range t.Fields {
+				fieldLine := indent +
+					clr.FieldName.apply(f.Name) +
+					strings.Repeat(" ", maxLen-len(f.Name)+2) +
+					f.Type
+				if f.Annotation != "" {
+					fieldLine += "  " + clr.OpaquePrefix.apply("// "+f.Annotation)
+				}
+				fieldLine += "\n"
+				if _, err := io.WriteString(w, fieldLine); err != nil {
+					return err
+				}
+			}
+			if _, err := io.WriteString(w, cfg.color.CloseBrace.apply("}")); err != nil {
+				return err
+			}
 
 		case KindMap, KindSlice, KindArray:
-			sb.WriteString(fmt.Sprintf("type %s %s", t.Name, t.TargetType))
+			line := clr.Number.apply("type") + " " + clr.TypeHeader.apply(t.Name) + " " + t.TargetType
+			if _, err := io.WriteString(w, line); err != nil {
+				return err
+			}
 		case KindGobEncoder, KindBinaryMarshaler, KindTextMarshaler:
-			sb.WriteString(fmt.Sprintf("type %s // %s", t.Name, t.Annotation))
+			line := clr.Number.apply("type") + " " + clr.TypeHeader.apply(t.Name) +
+				" " + clr.OpaquePrefix.apply("// "+t.Annotation)
+			if _, err := io.WriteString(w, line); err != nil {
+				return err
+			}
 		default:
-			sb.WriteString("// type " + t.Name)
+			line := clr.OpaquePrefix.apply("// type " + t.Name)
+			if _, err := io.WriteString(w, line); err != nil {
+				return err
+			}
 		}
 	}
-	return sb.String()
+	return nil
 }
 
 func buildTypeDecl(ti TypeInfo, byID map[int]TypeInfo) TypeDecl {

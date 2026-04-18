@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- Example 1: Decode a struct and print formatted output ------------------
+// --- Example 1: Collect a struct and print formatted output ------------------
 
 type readmePoint struct {
 	X, Y int
@@ -28,7 +28,7 @@ func TestREADME_DecodeAndFormat(t *testing.T) {
 	require.NoError(t, enc.Encode(readmePoint{X: 3, Y: 7}))
 
 	ins := gobspect.New()
-	values, err := ins.Decode(&buf)
+	values, err := ins.Stream(&buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, values, 1)
 
@@ -47,8 +47,10 @@ func TestREADME_DecodeTypes(t *testing.T) {
 	require.NoError(t, enc.Encode(readmePoint{X: 1, Y: 2}))
 
 	ins := gobspect.New()
-	types, err := ins.DecodeTypes(&buf)
+	s := ins.Stream(&buf)
+	_, err := s.Collect()
 	require.NoError(t, err)
+	types := s.Types()
 	require.Len(t, types, 1)
 
 	ti := types[0]
@@ -59,20 +61,21 @@ func TestREADME_DecodeTypes(t *testing.T) {
 	assert.Equal(t, "Y", ti.Fields[1].Name)
 }
 
-// --- Example 3: DecodeStream returns types and values together ---------------
+// --- Example 3: Stream returns types and values together ----------------------
 
-func TestREADME_DecodeStream(t *testing.T) {
+func TestREADME_Stream(t *testing.T) {
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
 	require.NoError(t, enc.Encode(readmePoint{X: 5, Y: 10}))
 	require.NoError(t, enc.Encode(readmePoint{X: 0, Y: 0}))
 
 	ins := gobspect.New()
-	result := ins.DecodeStream(&buf)
-	require.NoError(t, result.Err)
+	s := ins.Stream(&buf)
+	values, err := s.Collect()
+	require.NoError(t, err)
 
-	assert.Len(t, result.Values, 2)
-	assert.NotEmpty(t, result.Types)
+	assert.Len(t, values, 2)
+	assert.NotEmpty(t, s.Types())
 }
 
 // --- Example 4: Multi-value stream ------------------------------------------
@@ -85,7 +88,7 @@ func TestREADME_MultiValueStream(t *testing.T) {
 	require.NoError(t, enc.Encode(readmePoint{5, 6}))
 
 	ins := gobspect.New()
-	values, err := ins.Decode(&buf)
+	values, err := ins.Stream(&buf).Collect()
 	require.NoError(t, err)
 	assert.Len(t, values, 3)
 }
@@ -99,7 +102,7 @@ func TestREADME_BuiltinOpaques(t *testing.T) {
 	require.NoError(t, enc.Encode(ts))
 
 	ins := gobspect.New()
-	values, err := ins.Decode(&buf)
+	values, err := ins.Stream(&buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, values, 1)
 
@@ -115,7 +118,7 @@ func TestREADME_BigInt(t *testing.T) {
 	require.NoError(t, enc.Encode(n))
 
 	ins := gobspect.New()
-	values, err := ins.Decode(&buf)
+	values, err := ins.Stream(&buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, values, 1)
 
@@ -150,7 +153,7 @@ func TestREADME_CustomOpaqueDecoder(t *testing.T) {
 		return "decoded:" + string(data), nil
 	})
 
-	values, err := ins.Decode(&buf)
+	values, err := ins.Stream(&buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, values, 1)
 
@@ -166,7 +169,7 @@ func TestREADME_FormatOptions(t *testing.T) {
 	require.NoError(t, enc.Encode(readmePoint{X: 1, Y: 2}))
 
 	ins := gobspect.New()
-	values, err := ins.Decode(&buf)
+	values, err := ins.Stream(&buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, values, 1)
 
@@ -183,19 +186,16 @@ func TestREADME_ToJSON(t *testing.T) {
 	require.NoError(t, enc.Encode(readmePoint{X: 3, Y: 7}))
 
 	ins := gobspect.New()
-	result := ins.DecodeStream(&buf)
-	require.NoError(t, result.Err)
+	values, err := ins.Stream(&buf).Collect()
+	require.NoError(t, err)
+	require.Len(t, values, 1)
 
-	b, err := json.Marshal(result)
+	b, err := gobspect.ToJSON(values[0])
 	require.NoError(t, err)
 
 	var m map[string]any
 	require.NoError(t, json.Unmarshal(b, &m))
-
-	values := m["values"].([]any)
-	require.Len(t, values, 1)
-	v := values[0].(map[string]any)
-	assert.Equal(t, "struct", v["kind"])
+	assert.Equal(t, "struct", m["kind"])
 }
 
 func TestREADME_ToJSONIndent(t *testing.T) {
@@ -203,7 +203,7 @@ func TestREADME_ToJSONIndent(t *testing.T) {
 	require.NoError(t, gob.NewEncoder(&buf).Encode(readmePoint{X: 3, Y: 7}))
 
 	ins := gobspect.New()
-	values, err := ins.Decode(&buf)
+	values, err := ins.Stream(&buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, values, 1)
 
@@ -234,7 +234,7 @@ func TestREADME_WithTimeFormat(t *testing.T) {
 	require.NoError(t, gob.NewEncoder(&buf).Encode(ts))
 
 	ins := gobspect.New(gobspect.WithTimeFormat("2006-01-02"))
-	values, err := ins.Decode(&buf)
+	values, err := ins.Stream(&buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, values, 1)
 
@@ -257,7 +257,7 @@ func TestREADME_WithRedactKeys(t *testing.T) {
 	}))
 
 	ins := gobspect.New()
-	values, err := ins.Decode(&buf)
+	values, err := ins.Stream(&buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, values, 1)
 
@@ -279,7 +279,7 @@ func TestREADME_WithRedactTypes(t *testing.T) {
 	require.NoError(t, gob.NewEncoder(&buf).Encode(readmeHolder{Data: readmeSensitive{V: "topsecret"}}))
 
 	ins := gobspect.New()
-	values, err := ins.Decode(&buf)
+	values, err := ins.Stream(&buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, values, 1)
 
@@ -295,7 +295,7 @@ func TestREADME_WithBytesFormat(t *testing.T) {
 	require.NoError(t, gob.NewEncoder(&buf).Encode(wrapBytes{V: []byte{0xde, 0xad}}))
 
 	ins := gobspect.New()
-	values, err := ins.Decode(&buf)
+	values, err := ins.Stream(&buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, values, 1)
 

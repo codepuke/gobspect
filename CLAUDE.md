@@ -11,14 +11,14 @@ When asked to implement a PRD.md:
 2. Implement features in the order they appear — dependencies flow top to bottom
 3. Spawn each feature as an isolated Agent invocation
 4. Do not spawn the next Agent until the current one completes with passing tests
-5. After all features complete, run `go test ./query/...` and report results
+5. After all features complete, run `go test ./...` and report results
 
 ## Key Design Decisions
 
 - **Decode only.** No encoding support. Do not add encoding functionality.
 - **No runtime dependency on inspected types.** Opaque type decoders (time.Time, big.Int, UUID, etc.) are self-contained reimplementations. Never import `time`, `math/big`, `github.com/google/uuid`, or similar in the decoder layer (`decode.go`, `valuedecode.go`, `builtins.go`, `wire.go`). Presentation layers (`format.go`, `json.go`) and test code may import them when needed.
 - **Two-layer output:** a structural `Value` AST that preserves all wire information, and a `Format()` function for human-readable rendering. Never discard wire information in the AST to make formatting easier.
-- **Extensible opaque decoding.** Users register `OpaqueDecoder` functions keyed by type name. Built-in decoders are pre-registered and can be overridden.
+- **Extensible opaque decoding.** Users register `DecoderFunc` functions keyed by type name (`OpaqueDecoder` is a backward-compatible alias). Built-in decoders are pre-registered and can be overridden.
 
 ## Architecture
 
@@ -29,7 +29,7 @@ Read `docs/architecture.md` for the full design. In brief:
 - `valuedecode.go` — value decoding: primitives, structs, maps, slices, arrays, opaques, interfaces
 - `types.go` — Value AST node types (StructValue, MapValue, OpaqueValue, etc.)
 - `wire.go` — wire format primitives (varint, type ID, wireType struct decoding)
-- `registry.go` — OpaqueDecoder registry, RegisterDecoder, built-in registration
+- `registry.go` — DecoderFunc registry, RegisterDecoder, built-in registration
 - `builtins.go` — decoders for std lib and common third-party opaque types
 - `format.go` — human-readable rendering of Value trees
 

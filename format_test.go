@@ -1,11 +1,14 @@
 package gobspect_test
 
 import (
+	"bytes"
 	"encoding/gob"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,7 +50,7 @@ func formatFirst(tb testing.TB, v any, opts ...gobspect.FormatOption) string {
 	tb.Helper()
 	buf := gobEncode(tb, v)
 	ins := gobspect.New()
-	vals, err := ins.Decode(buf)
+	vals, err := ins.Stream(buf).Collect()
 	require.NoError(tb, err)
 	require.Len(tb, vals, 1)
 	return gobspect.Format(vals[0], opts...)
@@ -452,7 +455,7 @@ func TestFormat_WithTimeFormat_DateOnly(t *testing.T) {
 	ts := time.Date(2024, 6, 15, 14, 30, 0, 0, time.UTC)
 	buf := gobEncode(t, ts)
 	ins := gobspect.New(gobspect.WithTimeFormat("2006-01-02"))
-	vals, err := ins.Decode(buf)
+	vals, err := ins.Stream(buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 1)
 	out := gobspect.Format(vals[0])
@@ -505,14 +508,15 @@ type schemaOrder struct {
 	Tags  schemaTagMap
 }
 
-// schemaFor encodes v, runs DecodeTypes, and returns FormatSchema output.
+// schemaFor encodes v, drains the stream, and returns FormatSchema output.
 func schemaFor(tb testing.TB, v any, opts ...gobspect.FormatOption) string {
 	tb.Helper()
 	buf := gobEncode(tb, v)
 	ins := gobspect.New()
-	types, err := ins.DecodeTypes(buf)
+	s := ins.Stream(buf)
+	_, err := s.Collect()
 	require.NoError(tb, err)
-	return gobspect.FormatSchema(types, opts...).String()
+	return gobspect.FormatSchema(s.Types(), opts...).String()
 }
 
 // readGolden reads a golden file from the testdata directory.
@@ -751,14 +755,14 @@ func TestFormat_InterfaceNoTypeName(t *testing.T) {
 
 // — DecodeSchema tests —————————————————————————————————————————————————————————
 
-// TestDecodeSchema verifies the convenience wrapper returns the same result as
-// DecodeTypes + FormatSchema.
-func TestDecodeSchema(t *testing.T) {
+// TestSchema verifies that Stream.Schema returns the same result as
+// Stream.Collect + FormatSchema.
+func TestSchema(t *testing.T) {
 	buf := gobEncode(t, NamedPoint{Name: "origin", Pt: Point{X: 1, Y: 2}})
 	ins := gobspect.New()
-	schemaAST, err := ins.DecodeSchema(buf)
+	schemaAST, err := ins.Stream(buf).Schema()
 	require.NoError(t, err)
-    schema := schemaAST.String()
+	schema := schemaAST.String()
 	assert.Contains(t, schema, "type NamedPoint struct")
 	assert.Contains(t, schema, "Name  string")
 	assert.Contains(t, schema, "Pt    Point")
@@ -1069,5 +1073,779 @@ func BenchmarkFmtMapLargeStructKeys(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		_ = gobspect.Format(mv)
+	}
+}
+
+// — FormatTo tests ——————————————————————————————————————————————————————————
+
+// limitWriter is a writer that errors after writing N bytes total.
+type limitWriter struct {
+	limit int
+	n     int
+}
+
+var errLimitReached = errors.New("limit reached")
+
+func (w *limitWriter) Write(p []byte) (int, error) {
+	remaining := w.limit - w.n
+	if remaining <= 0 {
+		return 0, errLimitReached
+	}
+	if len(p) > remaining {
+		w.n += remaining
+		return remaining, errLimitReached
+	}
+	w.n += len(p)
+	return len(p), nil
+}
+
+// formatToFirst encodes v with encoding/gob, decodes with a fresh Inspector,
+// and calls FormatTo with the given writer and options on the single resulting Value.
+func formatToFirst(tb testing.TB, w *bytes.Buffer, v any, opts ...gobspect.FormatOption) error {
+	tb.Helper()
+	buf := gobEncode(tb, v)
+	ins := gobspect.New()
+	vals, err := ins.Stream(buf).Collect()
+	require.NoError(tb, err)
+	require.Len(tb, vals, 1)
+	return gobspect.FormatTo(w, vals[0], opts...)
+}
+
+// TestFormatTo_EquivalentToFormat verifies that FormatTo produces byte-identical
+// output to Format for all existing test cases.
+func TestFormatTo_EquivalentToFormat(t *testing.T) {
+	tests := []struct {
+		name  string
+		value func(tb testing.TB) gobspect.Value
+		opts  []gobspect.FormatOption
+	}{
+		{
+			name: "bool_true",
+			value: func(tb testing.TB) gobspect.Value { return gobspect.BoolValue{V: true} },
+		},
+		{
+			name: "bool_false",
+			value: func(tb testing.TB) gobspect.Value { return gobspect.BoolValue{V: false} },
+		},
+		{
+			name: "int_value",
+			value: func(tb testing.TB) gobspect.Value { return gobspect.IntValue{V: -42} },
+		},
+		{
+			name: "uint_value",
+			value: func(tb testing.TB) gobspect.Value { return gobspect.UintValue{V: 100} },
+		},
+		{
+			name: "float_integer_valued",
+			value: func(tb testing.TB) gobspect.Value { return gobspect.FloatValue{V: 1.0} },
+		},
+		{
+			name: "float_pi",
+			value: func(tb testing.TB) gobspect.Value { return gobspect.FloatValue{V: math.Pi} },
+		},
+		{
+			name: "complex_positive_imag",
+			value: func(tb testing.TB) gobspect.Value {
+				return gobspect.ComplexValue{Real: 3, Imag: 4}
+			},
+		},
+		{
+			name: "complex_negative_imag",
+			value: func(tb testing.TB) gobspect.Value {
+				return gobspect.ComplexValue{Real: 3, Imag: -4}
+			},
+		},
+		{
+			name: "string_value",
+			value: func(tb testing.TB) gobspect.Value { return gobspect.StringValue{V: "hello"} },
+		},
+		{
+			name: "bytes_empty",
+			value: func(tb testing.TB) gobspect.Value { return gobspect.BytesValue{V: nil} },
+		},
+		{
+			name: "bytes_hex",
+			value: func(tb testing.TB) gobspect.Value {
+				return gobspect.BytesValue{V: []byte{0xde, 0xad, 0xbe, 0xef}}
+			},
+		},
+		{
+			name: "bytes_printable_utf8",
+			value: func(tb testing.TB) gobspect.Value {
+				return gobspect.BytesValue{V: []byte("hello world")}
+			},
+		},
+		{
+			name: "nil_value",
+			value: func(tb testing.TB) gobspect.Value { return gobspect.NilValue{} },
+		},
+		{
+			name: "interface_nil",
+			value: func(tb testing.TB) gobspect.Value {
+				return gobspect.InterfaceValue{TypeName: "T", Value: gobspect.NilValue{}}
+			},
+		},
+		{
+			name: "interface_with_value",
+			value: func(tb testing.TB) gobspect.Value {
+				return gobspect.InterfaceValue{TypeName: "T", Value: gobspect.IntValue{V: 7}}
+			},
+		},
+		{
+			name: "opaque_with_decoded_string",
+			value: func(tb testing.TB) gobspect.Value {
+				return gobspect.OpaqueValue{TypeName: "time.Time", Raw: []byte{1, 2, 3}, Decoded: "2024-01-01T00:00:00Z"}
+			},
+		},
+		{
+			name: "opaque_raw_fallback",
+			value: func(tb testing.TB) gobspect.Value {
+				return gobspect.OpaqueValue{TypeName: "myType", Raw: []byte{0xab, 0xcd}}
+			},
+		},
+		{
+			name: "struct_empty",
+			value: func(tb testing.TB) gobspect.Value {
+				return gobspect.StructValue{TypeName: "Empty"}
+			},
+		},
+		{
+			name: "struct_nested",
+			value: func(tb testing.TB) gobspect.Value {
+				buf := gobEncode(tb, fmtOuter{X: fmtInner{A: 42, B: "hello"}, Y: 3.14})
+				ins := gobspect.New()
+				vals, err := ins.Stream(buf).Collect()
+				require.NoError(tb, err)
+				require.Len(tb, vals, 1)
+				return vals[0]
+			},
+		},
+		{
+			name: "map_short_inline",
+			value: func(tb testing.TB) gobspect.Value {
+				buf := gobEncode(tb, StringMap{"a": 1, "b": 2})
+				ins := gobspect.New()
+				vals, err := ins.Stream(buf).Collect()
+				require.NoError(tb, err)
+				require.Len(tb, vals, 1)
+				return vals[0]
+			},
+		},
+		{
+			name: "map_long_indented",
+			value: func(tb testing.TB) gobspect.Value {
+				buf := gobEncode(tb, StringMap{
+					"alpha": 100, "beta": 200, "delta": 300, "gamma": 400, "zeta": 500,
+				})
+				ins := gobspect.New()
+				vals, err := ins.Stream(buf).Collect()
+				require.NoError(tb, err)
+				require.Len(tb, vals, 1)
+				return vals[0]
+			},
+		},
+		{
+			name: "slice_inline",
+			value: func(tb testing.TB) gobspect.Value {
+				buf := gobEncode(tb, IntSlice{10, 20, 30})
+				ins := gobspect.New()
+				vals, err := ins.Stream(buf).Collect()
+				require.NoError(tb, err)
+				require.Len(tb, vals, 1)
+				return vals[0]
+			},
+		},
+		{
+			name: "array_inline",
+			value: func(tb testing.TB) gobspect.Value {
+				buf := gobEncode(tb, IntArray{1, 2, 3, 4})
+				ins := gobspect.New()
+				vals, err := ins.Stream(buf).Collect()
+				require.NoError(tb, err)
+				require.Len(tb, vals, 1)
+				return vals[0]
+			},
+		},
+		{
+			name: "slice_empty",
+			value: func(tb testing.TB) gobspect.Value {
+				return gobspect.SliceValue{ElemType: "int"}
+			},
+		},
+		{
+			name: "array_empty",
+			value: func(tb testing.TB) gobspect.Value {
+				return gobspect.ArrayValue{ElemType: "string", Len: 5}
+			},
+		},
+		{
+			name: "with_indent_tab",
+			value: func(tb testing.TB) gobspect.Value {
+				buf := gobEncode(tb, fmtOuter{X: fmtInner{A: 1, B: "x"}, Y: 0})
+				ins := gobspect.New()
+				vals, err := ins.Stream(buf).Collect()
+				require.NoError(tb, err)
+				require.Len(tb, vals, 1)
+				return vals[0]
+			},
+			opts: []gobspect.FormatOption{gobspect.WithIndent("\t")},
+		},
+		{
+			name: "bytes_base64",
+			value: func(tb testing.TB) gobspect.Value {
+				return gobspect.BytesValue{V: []byte{0xde, 0xad}}
+			},
+			opts: []gobspect.FormatOption{gobspect.WithBytesFormat(gobspect.BytesBase64)},
+		},
+		{
+			name: "bytes_literal",
+			value: func(tb testing.TB) gobspect.Value {
+				return gobspect.BytesValue{V: []byte{0xde, 0xad}}
+			},
+			opts: []gobspect.FormatOption{gobspect.WithBytesFormat(gobspect.BytesLiteral)},
+		},
+		{
+			name: "with_max_bytes_truncation",
+			value: func(tb testing.TB) gobspect.Value {
+				return gobspect.BytesValue{V: []byte{0x01, 0x02, 0x03, 0x04, 0x05}}
+			},
+			opts: []gobspect.FormatOption{gobspect.WithMaxBytes(3)},
+		},
+		{
+			name: "redact_keys",
+			value: func(tb testing.TB) gobspect.Value {
+				buf := gobEncode(tb, secretStruct{Username: "alice", Password: "s3cr3t", Age: 30})
+				ins := gobspect.New()
+				vals, err := ins.Stream(buf).Collect()
+				require.NoError(tb, err)
+				require.Len(tb, vals, 1)
+				return vals[0]
+			},
+			opts: []gobspect.FormatOption{
+				gobspect.WithRedactKeys(gobspect.RedactConfig{Keys: []string{"Password"}}),
+			},
+		},
+		{
+			name: "redact_types",
+			value: func(tb testing.TB) gobspect.Value {
+				buf := gobEncode(tb, holdsTypes{S: sensitiveType{V: "secret"}, N: normalType{V: "public"}})
+				ins := gobspect.New()
+				vals, err := ins.Stream(buf).Collect()
+				require.NoError(tb, err)
+				require.Len(tb, vals, 1)
+				return vals[0]
+			},
+			opts: []gobspect.FormatOption{
+				gobspect.WithRedactTypes(gobspect.RedactTypesConfig{Types: []string{"sensitiveType"}}),
+			},
+		},
+		{
+			name: "unknown_value_type",
+			value: func(tb testing.TB) gobspect.Value {
+				// Use a known value so Format doesn't panic; unknown path is covered by Format's default case.
+				return gobspect.IntValue{V: 0}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := tt.value(t)
+			want := gobspect.Format(v, tt.opts...)
+			var buf bytes.Buffer
+			err := gobspect.FormatTo(&buf, v, tt.opts...)
+			assert.NoError(t, err)
+			assert.Equal(t, want, buf.String(), "FormatTo output must be byte-identical to Format output")
+		})
+	}
+}
+
+// TestFormatTo_LimitWriter verifies that FormatTo propagates write errors and stops early.
+func TestFormatTo_LimitWriter(t *testing.T) {
+	// Use a value that will produce at least several bytes of output.
+	v := gobspect.StructValue{
+		TypeName: "MyStruct",
+		Fields: []gobspect.Field{
+			{Name: "Alpha", Value: gobspect.StringValue{V: "hello world"}},
+			{Name: "Beta", Value: gobspect.IntValue{V: 42}},
+			{Name: "Gamma", Value: gobspect.FloatValue{V: 3.14}},
+		},
+	}
+
+	// Compute the full output so we know how long it is.
+	fullOutput := gobspect.Format(v)
+	require.Greater(t, len(fullOutput), 5, "test value must produce more than 5 bytes")
+
+	// Limit to 5 bytes — much less than the full output.
+	lw := &limitWriter{limit: 5}
+	err := gobspect.FormatTo(lw, v)
+
+	// Must return a non-nil error.
+	assert.Error(t, err, "FormatTo should return an error when the writer fails")
+
+	// Must not have written more bytes than the limit.
+	assert.LessOrEqual(t, lw.n, 5, "FormatTo must stop writing after the limit is reached")
+
+	// The error must not be nil (i.e. writing stopped, not full output).
+	assert.Less(t, lw.n, len(fullOutput), "FormatTo must not write the full output when the writer errors")
+}
+
+// TestFormatTo_StringsBuilderNilError verifies that FormatTo on a strings.Builder
+// returns nil (strings.Builder.Write never errors).
+func TestFormatTo_StringsBuilderNilError(t *testing.T) {
+	v := gobspect.StructValue{
+		TypeName: "T",
+		Fields: []gobspect.Field{
+			{Name: "X", Value: gobspect.IntValue{V: 1}},
+		},
+	}
+	var buf bytes.Buffer
+	err := gobspect.FormatTo(&buf, v)
+	assert.NoError(t, err)
+	assert.Equal(t, gobspect.Format(v), buf.String())
+}
+
+// — WithColor tests ————————————————————————————————————————————————————————————
+
+// TestFormat_NoColorDefault verifies that Format with no options produces
+// ANSI-escape-free output.
+func TestFormat_NoColorDefault(t *testing.T) {
+	v := gobspect.StructValue{
+		TypeName: "MyStruct",
+		Fields: []gobspect.Field{
+			{Name: "Name", Value: gobspect.StringValue{V: "alice"}},
+			{Name: "Age", Value: gobspect.IntValue{V: 30}},
+		},
+	}
+	got := gobspect.Format(v)
+	assert.NotContains(t, got, "\x1b[", "default Format must not emit ANSI escape codes")
+	assert.Contains(t, got, "MyStruct{")
+	assert.Contains(t, got, "Name: ")
+}
+
+// TestFormat_ANSIColor verifies that WithColor(ANSIColorScheme) wraps field
+// names with the expected ANSI green escape and type headers with bold cyan.
+func TestFormat_ANSIColor(t *testing.T) {
+	v := gobspect.StructValue{
+		TypeName: "MyStruct",
+		Fields: []gobspect.Field{
+			{Name: "Name", Value: gobspect.StringValue{V: "alice"}},
+			{Name: "Age", Value: gobspect.IntValue{V: 30}},
+		},
+	}
+	got := gobspect.Format(v, gobspect.WithColor(gobspect.ANSIColorScheme))
+
+	// Field names should be wrapped in green.
+	assert.Contains(t, got, "\x1b[32mName\x1b[0m", "field name should be green")
+	assert.Contains(t, got, "\x1b[32mAge\x1b[0m", "field name should be green")
+
+	// Type header should be wrapped in bold cyan (braces are separate, plain).
+	assert.Contains(t, got, "\x1b[1;36mMyStruct\x1b[0m{", "type header should be bold cyan")
+
+	// String value should be wrapped in yellow.
+	assert.Contains(t, got, "\x1b[33m\"alice\"\x1b[0m", "string value should be yellow")
+
+	// Number value should be wrapped in magenta.
+	assert.Contains(t, got, "\x1b[35m30\x1b[0m", "number value should be magenta")
+}
+
+// TestFormat_CustomScheme verifies that a caller-provided scheme with XML-style
+// tags produces expected tag-style output.
+func TestFormat_CustomScheme(t *testing.T) {
+	scheme := gobspect.ColorScheme{
+		FieldName:  gobspect.Style{Prefix: "<field>", Suffix: "</field>"},
+		TypeHeader: gobspect.Style{Prefix: "<type>", Suffix: "</type>"},
+		String:     gobspect.Style{Prefix: "<str>", Suffix: "</str>"},
+		Number:     gobspect.Style{Prefix: "<num>", Suffix: "</num>"},
+	}
+	v := gobspect.StructValue{
+		TypeName: "Order",
+		Fields: []gobspect.Field{
+			{Name: "ID", Value: gobspect.IntValue{V: 42}},
+			{Name: "Label", Value: gobspect.StringValue{V: "hello"}},
+		},
+	}
+	got := gobspect.Format(v, gobspect.WithColor(scheme))
+	assert.Contains(t, got, "<field>ID</field>")
+	assert.Contains(t, got, "<field>Label</field>")
+	assert.Contains(t, got, "<type>Order</type>{")
+	assert.Contains(t, got, "<num>42</num>")
+	assert.Contains(t, got, `<str>"hello"</str>`)
+}
+
+// TestFormat_ZeroValueSchemeIsNoop verifies that WithColor(ColorScheme{}) produces
+// output byte-identical to calling Format with no options.
+func TestFormat_ZeroValueSchemeIsNoop(t *testing.T) {
+	v := gobspect.StructValue{
+		TypeName: "Z",
+		Fields: []gobspect.Field{
+			{Name: "X", Value: gobspect.IntValue{V: 7}},
+		},
+	}
+	plain := gobspect.Format(v)
+	withNoop := gobspect.Format(v, gobspect.WithColor(gobspect.NoColorScheme))
+	assert.Equal(t, plain, withNoop, "zero-valued ColorScheme must be identity")
+}
+
+// TestFormat_ANSIColor_Scalars exercises every scalar token type.
+func TestFormat_ANSIColor_Scalars(t *testing.T) {
+	tests := []struct {
+		name      string
+		value     gobspect.Value
+		wantStyle string // ANSI prefix expected to appear in output
+	}{
+		{"bool_true", gobspect.BoolValue{V: true}, "\x1b[36m"},  // cyan
+		{"bool_false", gobspect.BoolValue{V: false}, "\x1b[36m"}, // cyan
+		{"int", gobspect.IntValue{V: -5}, "\x1b[35m"},            // magenta
+		{"uint", gobspect.UintValue{V: 9}, "\x1b[35m"},           // magenta
+		{"float", gobspect.FloatValue{V: 1.5}, "\x1b[35m"},       // magenta
+		{"string", gobspect.StringValue{V: "x"}, "\x1b[33m"},     // yellow
+		{"nil", gobspect.NilValue{}, "\x1b[36m"},                  // cyan
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := gobspect.Format(tt.value, gobspect.WithColor(gobspect.ANSIColorScheme))
+			assert.Contains(t, got, tt.wantStyle, "expected ANSI prefix in output for %s", tt.name)
+			assert.Contains(t, got, "\x1b[0m", "expected ANSI reset in output for %s", tt.name)
+		})
+	}
+}
+
+// TestFormat_ANSIColor_OpaquePrefix verifies that opaque type prefix "(TypeName)"
+// is wrapped in the OpaquePrefix (dim) style.
+func TestFormat_ANSIColor_OpaquePrefix(t *testing.T) {
+	v := gobspect.OpaqueValue{TypeName: "myType", Raw: []byte{0xab}}
+	got := gobspect.Format(v, gobspect.WithColor(gobspect.ANSIColorScheme))
+	// OpaquePrefix is dim (\x1b[2m)
+	assert.Contains(t, got, "\x1b[2m(myType)\x1b[0m", "opaque prefix should be dim")
+}
+
+// TestFormat_ANSIColor_Bytes verifies that raw byte output is wrapped in dim style.
+func TestFormat_ANSIColor_Bytes(t *testing.T) {
+	v := gobspect.BytesValue{V: []byte{0xde, 0xad}}
+	got := gobspect.Format(v, gobspect.WithColor(gobspect.ANSIColorScheme))
+	assert.Contains(t, got, "\x1b[2m", "bytes should be dim")
+}
+
+// TestSchema_Format_WithColor verifies that Schema.Format with ANSIColorScheme
+// contains ANSI codes for type names and field names.
+func TestSchema_Format_WithColor(t *testing.T) {
+	buf := gobEncode(t, NamedPoint{Name: "p", Pt: Point{X: 1, Y: 2}})
+	ins := gobspect.New()
+	s := ins.Stream(buf)
+	_, err := s.Collect()
+	require.NoError(t, err)
+	schema := gobspect.FormatSchema(s.Types())
+
+	got := schema.Format(gobspect.WithColor(gobspect.ANSIColorScheme))
+
+	// Type names should be bold cyan.
+	assert.Contains(t, got, "\x1b[1;36m", "schema type name should be bold cyan")
+	// "type" keyword should be magenta (Number style).
+	assert.Contains(t, got, "\x1b[35mtype\x1b[0m", "schema 'type' keyword should be magenta")
+	// Field names should be green (FieldName style).
+	assert.Contains(t, got, "\x1b[32m", "schema field names should be green")
+	// No ANSI codes in plain string.
+	plainGot := schema.Format()
+	assert.NotContains(t, plainGot, "\x1b[", "plain schema.Format() should not contain ANSI codes")
+}
+
+// TestSchema_Format_NoColor verifies Schema.Format() (no options) matches Schema.String().
+func TestSchema_Format_NoColor(t *testing.T) {
+	buf := gobEncode(t, NamedPoint{Name: "p", Pt: Point{X: 1, Y: 2}})
+	ins := gobspect.New()
+	s := ins.Stream(buf)
+	_, err := s.Collect()
+	require.NoError(t, err)
+	schema := gobspect.FormatSchema(s.Types())
+
+	assert.Equal(t, schema.String(), schema.Format(), "Format() with no options must equal String()")
+}
+
+// TestSchema_Format_WithIndent verifies that Schema.Format(WithIndent("\t"))
+// produces tab-indented output.
+func TestSchema_Format_WithIndent(t *testing.T) {
+	buf := gobEncode(t, NamedPoint{Name: "p", Pt: Point{X: 1, Y: 2}})
+	ins := gobspect.New()
+	s := ins.Stream(buf)
+	_, err := s.Collect()
+	require.NoError(t, err)
+	schema := gobspect.FormatSchema(s.Types())
+
+	got := schema.Format(gobspect.WithIndent("\t"))
+
+	// Fields in the NamedPoint struct should be tab-indented.
+	assert.Contains(t, got, "\tName", "fields should be tab-indented")
+	assert.Contains(t, got, "\tPt", "fields should be tab-indented")
+	// Should not contain two-space indent (the default).
+	assert.NotContains(t, got, "  Name", "should not use two-space indent when tab is specified")
+}
+
+// TestSchema_FormatTo_WritesCorrectly verifies that FormatTo writes output
+// byte-identical to Format.
+func TestSchema_FormatTo_WritesCorrectly(t *testing.T) {
+	buf := gobEncode(t, NamedPoint{Name: "p", Pt: Point{X: 1, Y: 2}})
+	ins := gobspect.New()
+	s := ins.Stream(buf)
+	_, err := s.Collect()
+	require.NoError(t, err)
+	schema := gobspect.FormatSchema(s.Types())
+
+	t.Run("plain_matches_format", func(t *testing.T) {
+		want := schema.Format()
+		var out bytes.Buffer
+		werr := schema.FormatTo(&out)
+		require.NoError(t, werr)
+		assert.Equal(t, want, out.String(), "FormatTo must be byte-identical to Format")
+	})
+
+	t.Run("with_indent_matches_format", func(t *testing.T) {
+		want := schema.Format(gobspect.WithIndent("\t"))
+		var out bytes.Buffer
+		werr := schema.FormatTo(&out, gobspect.WithIndent("\t"))
+		require.NoError(t, werr)
+		assert.Equal(t, want, out.String(), "FormatTo with WithIndent must be byte-identical to Format with WithIndent")
+	})
+
+	t.Run("with_color_matches_format", func(t *testing.T) {
+		want := schema.Format(gobspect.WithColor(gobspect.ANSIColorScheme))
+		var out bytes.Buffer
+		werr := schema.FormatTo(&out, gobspect.WithColor(gobspect.ANSIColorScheme))
+		require.NoError(t, werr)
+		assert.Equal(t, want, out.String(), "FormatTo with WithColor must be byte-identical to Format with WithColor")
+	})
+}
+
+// TestFormat_ANSIColor_InlineCollection verifies that inline collections still
+// contain ANSI codes when color is enabled.
+func TestFormat_ANSIColor_InlineCollection(t *testing.T) {
+	got := formatFirst(t, IntSlice{1, 2, 3}, gobspect.WithColor(gobspect.ANSIColorScheme))
+	// Inline slice: "[]int{1, 2, 3}" — TypeHeader wraps "[]int", braces are plain.
+	assert.Contains(t, got, "\x1b[1;36m[]int\x1b[0m{", "inline slice header should be bold cyan")
+	// Numbers should be wrapped in magenta.
+	assert.Contains(t, got, "\x1b[35m1\x1b[0m")
+}
+
+// TestFormat_ANSIColor_NoColorDoesNotChangeExisting verifies that the existing
+// golden test outputs are ANSI-free when no color option is given.
+func TestFormat_ANSIColor_NoColorDoesNotChangeExisting(t *testing.T) {
+	v := fmtOuter{X: fmtInner{A: 42, B: "hello"}, Y: 3.14}
+	plain := formatFirst(t, v)
+	assert.NotContains(t, plain, "\x1b[", "no-option Format must remain ANSI-free")
+
+	want := "" +
+		"fmtOuter{\n" +
+		"  X: fmtInner{\n" +
+		"    A: 42\n" +
+		"    B: \"hello\"\n" +
+		"  }\n" +
+		"  Y: 3.14\n" +
+		"}"
+	assert.Equal(t, want, plain, "plain output must remain byte-identical")
+}
+
+// — WithInlineWidth tests ——————————————————————————————————————————————————————
+
+// — WithMapOrder tests ————————————————————————————————————————————————————————
+
+// TestFormat_MapOrder verifies that:
+//   - Default (no option): entries are sorted alphabetically by formatted key.
+//   - WithMapOrder(MapOrderSorted): same sorted order.
+//   - WithMapOrder(MapOrderInsertion): entries are in wire (insertion) order.
+//
+// The MapValue is constructed directly with entries in a known non-alphabetical
+// order (z, a, m) so all three orderings are distinguishable.
+func TestFormat_MapOrder(t *testing.T) {
+	// Build a MapValue whose entries are in wire order: z, a, m.
+	// Sorted order would be: a, m, z.
+	mv := gobspect.MapValue{
+		GobTypeID: 1,
+		KeyType:   "string",
+		ElemType:  "int",
+		Entries: []gobspect.MapEntry{
+			{Key: gobspect.StringValue{V: "z"}, Value: gobspect.IntValue{V: 3}},
+			{Key: gobspect.StringValue{V: "a"}, Value: gobspect.IntValue{V: 1}},
+			{Key: gobspect.StringValue{V: "m"}, Value: gobspect.IntValue{V: 2}},
+		},
+	}
+
+	// Use a narrow inline width to force indented rendering so order is unambiguous.
+	narrowWidth := gobspect.WithInlineWidth(1)
+
+	t.Run("default_sorted", func(t *testing.T) {
+		got := gobspect.Format(mv, narrowWidth)
+		wantLines := []string{`"a": 1`, `"m": 2`, `"z": 3`}
+		for i, line := range wantLines {
+			assert.Contains(t, got, line, "sorted default: line %d", i)
+		}
+		// Verify positional order: a before m before z.
+		aPos := strings.Index(got, `"a"`)
+		mPos := strings.Index(got, `"m"`)
+		zPos := strings.Index(got, `"z"`)
+		assert.True(t, aPos < mPos && mPos < zPos, "default: want a < m < z order, got positions a=%d m=%d z=%d", aPos, mPos, zPos)
+	})
+
+	t.Run("explicit_sorted", func(t *testing.T) {
+		got := gobspect.Format(mv, narrowWidth, gobspect.WithMapOrder(gobspect.MapOrderSorted))
+		aPos := strings.Index(got, `"a"`)
+		mPos := strings.Index(got, `"m"`)
+		zPos := strings.Index(got, `"z"`)
+		assert.True(t, aPos < mPos && mPos < zPos, "MapOrderSorted: want a < m < z order, got positions a=%d m=%d z=%d", aPos, mPos, zPos)
+	})
+
+	t.Run("insertion_order", func(t *testing.T) {
+		got := gobspect.Format(mv, narrowWidth, gobspect.WithMapOrder(gobspect.MapOrderInsertion))
+		// Wire order is z, a, m.
+		zPos := strings.Index(got, `"z"`)
+		aPos := strings.Index(got, `"a"`)
+		mPos := strings.Index(got, `"m"`)
+		assert.True(t, zPos < aPos && aPos < mPos, "MapOrderInsertion: want z < a < m order, got positions z=%d a=%d m=%d", zPos, aPos, mPos)
+	})
+}
+
+// TestFormat_WithInlineWidth verifies that the inline-vs-multiline threshold can
+// be overridden via WithInlineWidth. We use a map whose plain-text inline
+// rendering is between 30 and 120 characters (and above 72) so that:
+//   - WithInlineWidth(120): renders inline (no newline inside the collection)
+//   - WithInlineWidth(30):  renders multiline (newline inside the collection)
+//   - default (no option):  renders multiline (default threshold is 72)
+func TestFormat_WithInlineWidth(t *testing.T) {
+	// Use a map that renders inline as something like:
+	//   map[string]int{"alpha": 100, "beta": 200, "gamma": 300, "delta": 400}
+	// which is ~56 chars — fits within 72 but not within 30.
+	// We need something that's > 72 to also test the default-stays-multiline case.
+	// Use a longer map: inline form ~85 chars, fits in 120 but not 72 or 30.
+	m := StringMap{
+		"alpha":   100,
+		"beta":    200,
+		"gamma":   300,
+		"delta":   400,
+		"epsilon": 500,
+	}
+
+	// Verify: inline form must be > 72 and <= 120 chars so all three assertions work.
+	// map[string]int{"alpha": 100, "beta": 200, "delta": 400, "epsilon": 500, "gamma": 300}
+	// is 84 chars — comfortably between 72 and 120.
+
+	t.Run("wide_threshold_renders_inline", func(t *testing.T) {
+		got := formatFirst(t, m, gobspect.WithInlineWidth(120))
+		// A single-line inline rendering has no newline inside the collection.
+		assert.NotContains(t, got, "\n", "WithInlineWidth(120) should render inline (no newline)")
+	})
+
+	t.Run("narrow_threshold_renders_multiline", func(t *testing.T) {
+		got := formatFirst(t, m, gobspect.WithInlineWidth(30))
+		assert.Contains(t, got, "\n", "WithInlineWidth(30) should render multiline")
+	})
+
+	t.Run("default_72_renders_multiline_for_long_map", func(t *testing.T) {
+		// No option: default threshold 72. The map inline form is ~84 chars, so it
+		// should fall back to multiline.
+		got := formatFirst(t, m)
+		assert.Contains(t, got, "\n", "default threshold 72 should render multiline for an 84-char inline form")
+	})
+}
+
+// — FormatBytes tests ————————————————————————————————————————————————————————
+
+func TestFormatBytes_AllFormats(t *testing.T) {
+	tests := []struct {
+		name     string
+		b        []byte
+		format   gobspect.BytesFormat
+		maxBytes int
+		want     string
+	}{
+		// Hex format
+		{
+			name:     "hex basic",
+			b:        []byte{0xde, 0xad, 0xbe, 0xef},
+			format:   gobspect.BytesHex,
+			maxBytes: 0,
+			want:     "deadbeef",
+		},
+		{
+			name:     "hex truncated",
+			b:        []byte{0x01, 0x02, 0x03, 0x04, 0x05},
+			format:   gobspect.BytesHex,
+			maxBytes: 3,
+			want:     "010203…",
+		},
+		{
+			name:     "hex no truncation when under limit",
+			b:        []byte{0xca, 0xfe},
+			format:   gobspect.BytesHex,
+			maxBytes: 64,
+			want:     "cafe",
+		},
+		{
+			name:     "hex empty",
+			b:        []byte{},
+			format:   gobspect.BytesHex,
+			maxBytes: 0,
+			want:     "[]",
+		},
+
+		// Base64 format
+		{
+			name:     "base64 basic",
+			b:        []byte("hello"),
+			format:   gobspect.BytesBase64,
+			maxBytes: 0,
+			want:     "aGVsbG8=",
+		},
+		{
+			name:     "base64 truncated",
+			b:        []byte{0x01, 0x02, 0x03, 0x04, 0x05},
+			format:   gobspect.BytesBase64,
+			maxBytes: 3,
+			want:     "AQID…",
+		},
+		{
+			name:     "base64 empty",
+			b:        []byte{},
+			format:   gobspect.BytesBase64,
+			maxBytes: 0,
+			want:     "[]",
+		},
+
+		// Literal format
+		{
+			name:     "literal basic",
+			b:        []byte{0x01, 0x02},
+			format:   gobspect.BytesLiteral,
+			maxBytes: 0,
+			want:     "[]byte{0x01, 0x02}",
+		},
+		{
+			name:     "literal truncated",
+			b:        []byte{0x01, 0x02, 0x03, 0x04},
+			format:   gobspect.BytesLiteral,
+			maxBytes: 2,
+			want:     "[]byte{0x01, 0x02}…",
+		},
+		{
+			name:     "literal empty",
+			b:        []byte{},
+			format:   gobspect.BytesLiteral,
+			maxBytes: 0,
+			want:     "[]",
+		},
+
+		// maxBytes=0 means no limit
+		{
+			name:     "hex zero maxBytes is no limit",
+			b:        []byte{0x01, 0x02, 0x03},
+			format:   gobspect.BytesHex,
+			maxBytes: 0,
+			want:     "010203",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := gobspect.FormatBytes(tt.b, tt.format, tt.maxBytes)
+			assert.Equal(t, tt.want, got)
+		})
 	}
 }
