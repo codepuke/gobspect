@@ -4,9 +4,10 @@ package gobspect
 // Use a type switch to dispatch on the concrete type.
 type Value interface {
 	gobValue()
-	// TypeID returns the stream-scoped type ID for composite values
-	// (StructValue, MapValue, SliceValue, ArrayValue).
-	// Scalar and opaque values return 0.
+	// TypeID returns the stream-scoped type ID for composite and opaque values
+	// (StructValue, MapValue, SliceValue, ArrayValue, OpaqueValue).
+	// Pure scalar values (IntValue, UintValue, FloatValue, ComplexValue,
+	// BoolValue, StringValue, BytesValue, NilValue, InterfaceValue) return 0.
 	TypeID() int
 }
 
@@ -110,8 +111,8 @@ func (NilValue) gobValue()       {}
 func (InterfaceValue) gobValue() {}
 func (OpaqueValue) gobValue()    {}
 
-// TypeID implementations — composites return their stream-scoped type ID;
-// scalars and opaque values return 0.
+// TypeID implementations — composites and OpaqueValue return their stream-scoped
+// type ID; pure scalars return 0.
 func (v StructValue) TypeID() int  { return v.GobTypeID }
 func (v MapValue) TypeID() int     { return v.GobTypeID }
 func (v SliceValue) TypeID() int   { return v.GobTypeID }

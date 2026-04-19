@@ -18,7 +18,7 @@ func AllPathSeq(root gobspect.Value, p Path) iter.Seq[gobspect.Value] {
 }
 
 // AllSeq returns an iterator over all values matched by expr against root,
-// expanding * segments lazily. Panics if expr is syntactically invalid
+// expanding wildcard segments lazily. Panics if expr is syntactically invalid
 // (matching All's behavior).
 func AllSeq(root gobspect.Value, expr string) iter.Seq[gobspect.Value] {
 	p, err := Parse(expr)
@@ -34,8 +34,8 @@ func AllPath(root gobspect.Value, p Path) []gobspect.Value {
 	return slices.Collect(AllPathSeq(root, p))
 }
 
-// All returns all values matched by expr against root, expanding * segments.
-// Panics if expr is syntactically invalid. Returns nil if nothing matches.
+// All returns all values matched by expr against root, expanding wildcard
+// segments. Panics if expr is syntactically invalid. Returns nil if nothing matches.
 func All(root gobspect.Value, expr string) []gobspect.Value {
 	p, err := Parse(expr)
 	if err != nil {

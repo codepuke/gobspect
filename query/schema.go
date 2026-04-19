@@ -8,7 +8,7 @@ import (
 )
 
 // SchemaAt evaluates a path expression statically against a schema to determine
-// the type expression of the resulting values. 
+// the type expression of the resulting values.
 // rootTypeExpr is the name of the type representing the root value of the query
 // (e.g., "Order", "[]main.LineItem").
 // Note: recursive descent (..) cannot be resolved statically.

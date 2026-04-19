@@ -68,9 +68,11 @@
 // Types that implement GobEncoder, BinaryMarshaler, or TextMarshaler are
 // represented as [OpaqueValue]. [New] pre-registers decoders for common types:
 //
-//   - time.Time (encoded as RFC 3339)
-//   - math/big.Int and math/big.Rat (auto-detected)
+//   - time.Time (encoded as RFC 3339 with nanosecond precision)
+//   - math/big.Int and math/big.Rat (auto-detected by wire format)
+//   - math/big.Float (registered under "math/big.Float")
 //   - UUID types from github.com/google/uuid and github.com/gofrs/uuid
+//   - github.com/shopspring/decimal.Decimal
 //
 // Additional decoders can be registered with [Inspector.RegisterDecoder].
 // TextMarshaler blobs are always decoded as UTF-8 strings automatically.

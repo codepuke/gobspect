@@ -38,11 +38,11 @@ Requires Go 1.26 or later.
 
 ### Schema inspection
 
-When you encounter an unknown `.gob` file, `DecodeSchema` is usually the first call to make. It reads the type definitions embedded in every gob stream and renders them as Go-style type declarations:
+When you encounter an unknown `.gob` file, `Stream.Schema` is usually the first call to make. It drains the stream, reads the type definitions embedded in every gob stream, and renders them as Go-style type declarations:
 
 ```go
 ins := gobspect.New()
-schema, err := ins.DecodeSchema(r) // r is any io.Reader
+schema, err := ins.Stream(r).Schema() // r is any io.Reader
 if err != nil {
     log.Fatal(err)
 }
@@ -75,25 +75,26 @@ type Time    // GobEncoder
 
 The gob wire format records only the short type name and raw encoded bytes for opaque types — no underlying structure and no import path — so no valid Go type declaration can be produced.
 
-`DecodeSchema` is a convenience wrapper around `DecodeTypes` + `FormatSchema`. Use them separately when you need access to the structured `[]TypeInfo` slice:
+`Stream.Schema` drains the stream and returns a `*Schema`. Use `Stream.Types` to access the structured `[]TypeInfo` slice directly, or call `FormatSchema` to convert it:
 
 ```go
 ins := gobspect.New()
-types, err := ins.DecodeTypes(r)
+stream := ins.Stream(r)
+values, err := stream.Collect()
 if err != nil {
     log.Fatal(err)
 }
-schema := gobspect.FormatSchema(types)
+schema := gobspect.FormatSchema(stream.Types())
 fmt.Println(schema)
 ```
 
-`FormatSchema` accepts the same `FormatOption` values as `Format`. Currently `WithIndent` is the relevant option; it controls the indentation of struct fields (default: two spaces).
+`Schema.Format` and `Schema.FormatTo` accept `FormatOption` values (e.g. `WithColor`, `WithIndent`) to control rendering.
 
 ### Decode a stream and format the output
 
 ```go
 ins := gobspect.New()
-values, err := ins.Decode(r) // r is any io.Reader
+values, err := ins.Stream(r).Collect() // r is any io.Reader
 if err != nil {
     log.Fatal(err)
 }
@@ -102,13 +103,14 @@ for _, v := range values {
 }
 ```
 
-`New` returns an `Inspector` with all built-in opaque decoders pre-registered. `Decode` returns one `Value` per top-level `Encode` call in the original stream. A stream may contain multiple values.
+`New` returns an `Inspector` with all built-in opaque decoders pre-registered. `Collect` returns one `Value` per top-level `Encode` call in the original stream. A stream may contain multiple values.
 
 ### Stream values one at a time with an iterator
 
 ```go
 ins := gobspect.New()
-for v, err := range ins.Values(r) {
+stream := ins.Stream(r)
+for v, err := range stream.Values() {
     if err != nil {
         log.Fatal(err)
     }
@@ -118,45 +120,39 @@ for v, err := range ins.Values(r) {
 
 `Values` returns an `iter.Seq2[Value, error]` that yields each decoded value as it is read, without buffering the entire stream first. An early `break` is safe; the iterator stops reading immediately.
 
-**When to prefer `Values` over `Decode`:**
+> **Note:** A `Stream` is single-use. Calling `Values` on an already-consumed `Stream` panics. Create a new `Stream` with `ins.Stream(r)` for each pass.
+
+**When to prefer `Values` over `Collect`:**
 - The stream is large and you want to process or discard each value before reading the next.
 - You want to stop partway through (e.g., search for the first matching value).
 - You want to integrate with other range-based pipelines.
 
-Use `Decode` when you need all values as a slice, or `DecodeStream` when you also need the type definitions.
+Use `Collect` when you need all values as a slice.
 
-### Inspect type definitions without decoding values
+### Inspect type definitions alongside values
 
 ```go
 ins := gobspect.New()
-types, err := ins.DecodeTypes(r)
-if err != nil {
-    log.Fatal(err)
+stream := ins.Stream(r)
+for v, err := range stream.Values() {
+    if err != nil {
+        log.Fatal(err)
+    }
+    // stream.Types() grows as the stream is consumed.
+    fmt.Printf("decoded value; %d types known so far\n", len(stream.Types()))
+    fmt.Println(gobspect.Format(v))
 }
-for _, ti := range types {
+// After the loop, stream.Types() contains all type definitions.
+for _, ti := range stream.Types() {
     fmt.Printf("type %s kind=%v fields=%d\n", ti.Name, ti.Kind, len(ti.Fields))
 }
 ```
 
-`DecodeTypes` reads the stream and returns `TypeInfo` for every type definition encountered, in stream order. Value messages are skipped.
-
-### Retrieve types and values together
-
-```go
-ins := gobspect.New()
-result := ins.DecodeStream(r)
-if result.Err != nil {
-    log.Fatal(result.Err)
-}
-// result.Types contains all TypeInfo definitions.
-// result.Values contains all decoded Value nodes.
-```
-
-`DecodeStream` is the comprehensive variant. `Decode` is a convenience wrapper that returns only values.
+`Stream.Types` returns the live slice of `TypeInfo` for every type definition encountered in stream order. It grows incrementally as the stream is consumed.
 
 ### Compressed streams
 
-`Decode` accepts any `io.Reader`, so compressed streams work by wrapping the reader before passing it in. For gzip, use `compress/gzip.NewReader`; apply the same pattern for any other compression format.
+`Inspector.Stream` accepts any `io.Reader`, so compressed streams work by wrapping the reader before passing it in. For gzip, use `compress/gzip.NewReader`; apply the same pattern for any other compression format.
 
 ### Register a custom opaque decoder
 
@@ -183,7 +179,7 @@ The returned value is stored in `OpaqueValue.Decoded` and used by `Format`. Regi
 
 ### JSON output
 
-`StreamResult` implements `json.Marshaler` and produces `{"types": [...], "values": [...], "error": null}`. Individual values can be serialized with `gobspect.ToJSON(v)` (compact) or `gobspect.ToJSONIndent(v, "", "  ")` (pretty-printed).
+Individual values can be serialized with `gobspect.ToJSON(v)` (compact) or `gobspect.ToJSONIndent(v, "", "  ")` (pretty-printed).
 
 ```go
 type Point struct{ X, Y int }
@@ -192,13 +188,13 @@ var buf bytes.Buffer
 gob.NewEncoder(&buf).Encode(Point{X: 3, Y: 7})
 
 ins := gobspect.New()
-result := ins.DecodeStream(&buf)
-
-// Compact JSON of the full stream result.
-b, err := json.Marshal(result)
+values, err := ins.Stream(&buf).Collect()
+if err != nil {
+    log.Fatal(err)
+}
 
 // Pretty-print a single value.
-b, err = gobspect.ToJSONIndent(result.Values[0], "", "  ")
+b, err := gobspect.ToJSONIndent(values[0], "", "  ")
 ```
 
 The above produces output like:
@@ -321,16 +317,16 @@ The full type definitions are documented in [docs/api.md](docs/api.md).
 Limits can be set at construction time to bound resource use on untrusted input:
 
 ```go
-ins := gobspect.New(gobspect.WithOptions(gobspect.Options{
-    MaxBytes: 4 * 1024 * 1024, // 4 MiB
-}))
+ins := gobspect.New(gobspect.WithReadLimit(4 * 1024 * 1024)) // 4 MiB
 ```
+
+`WithReadLimit` caps the total bytes read across the entire stream. Zero means no limit.
 
 Hard limits are always enforced regardless of options: 64 MiB per message, 65536 struct fields, and 2^30 elements in slices, maps, and arrays.
 
 ## Error handling
 
-The decoder does not panic on malformed input. All errors are returned. `DecodeStream` returns partial results alongside any error: a stream that decodes successfully up to a corrupt message returns those values plus the error.
+The decoder does not panic on malformed input. All errors are returned. `Stream.Collect` returns partial results alongside any error: a stream that decodes successfully up to a corrupt message returns those values plus the error. The `Values` iterator similarly stops and yields `(nil, err)` on the first error.
 
 ## Query
 

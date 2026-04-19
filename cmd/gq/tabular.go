@@ -376,7 +376,7 @@ func cellString(v gobspect.Value) string {
 	case gobspect.StructValue:
 		return "(struct)"
 	case gobspect.SliceValue:
-		return "(array)"
+		return "(slice)"
 	case gobspect.ArrayValue:
 		return "(array)"
 	case gobspect.MapValue:

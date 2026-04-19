@@ -94,7 +94,7 @@ func TestRun_SortModifiersWithoutSort(t *testing.T) {
 	exitCode := run([]string{"-sort-desc"}, r, &stdout, &stderr)
 
 	assert.Equal(t, 0, exitCode, "should be a warning, not an error")
-	assert.Contains(t, stderr.String(), "-sort-* flags have no effect without -sort")
+	assert.Contains(t, stderr.String(), "--sort-* flags have no effect without --sort")
 }
 
 // TestRun_SortWithLimitOffset verifies -sort combined with -limit and -offset

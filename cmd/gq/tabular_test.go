@@ -50,7 +50,7 @@ func TestCellStringComplexTypes(t *testing.T) {
 		want string
 	}{
 		{"struct", gobspect.StructValue{TypeName: "Foo"}, "(struct)"},
-		{"slice", gobspect.SliceValue{ElemType: "int"}, "(array)"},
+		{"slice", gobspect.SliceValue{ElemType: "int"}, "(slice)"},
 		{"array", gobspect.ArrayValue{ElemType: "int"}, "(array)"},
 		{"map", gobspect.MapValue{KeyType: "string", ElemType: "int"}, "(map)"},
 		{"opaque raw", gobspect.OpaqueValue{TypeName: "T", Raw: []byte{1, 2}}, "(opaque)"},

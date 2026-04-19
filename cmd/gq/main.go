@@ -500,7 +500,7 @@ func validateFlags(schema, types bool, queryExpr string, format string, index, l
 		warnings = append(warnings, fmt.Sprintf("-r has no effect with --format %s; ignoring", format))
 	}
 	if sort == "" && (sortDesc || sortFold || sortDrop) {
-		warnings = append(warnings, "-sort-* flags have no effect without -sort")
+		warnings = append(warnings, "--sort-* flags have no effect without --sort")
 	}
 	return warnings, nil
 }

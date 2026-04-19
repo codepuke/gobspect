@@ -1,6 +1,6 @@
 // Package query provides path-based navigation of decoded gobspect Value trees.
 //
-// Navigate nested structs, slices, and maps without writing type switches.
+// Navigate nested structs, arrays, slices, and maps without writing type switches.
 // Paths are dot-separated segment expressions:
 //
 //	v, ok   := query.Get(root, "Orders.0.Customer.Name")
@@ -34,8 +34,10 @@
 //
 // # One-off functions
 //
-// [Get], [All], [Keys], and [MustGet] accept a path expression as a plain string
-// and panic if the expression is syntactically invalid:
+// [Get], [All], [AllSeq], [Keys], and [MustGet] accept a path expression as a
+// plain string and panic if the expression is syntactically invalid. This is
+// intentional: these functions are designed for call sites where the path is a
+// compile-time constant and a bad expression is a programming error.
 //
 //	v, ok   := query.Get(root, "Orders.0.Customer.Name")
 //	names   := query.All(root, "Orders.*.Customer.Name")
@@ -44,9 +46,9 @@
 //
 // # Pre-compiled paths
 //
-// Use [Parse] with [GetPath], [AllPath], and [KeysPath] when evaluating the same
-// path expression against many roots, or when you need to handle syntax errors
-// without panicking:
+// Use [Parse] with [GetPath], [AllPath], [AllPathSeq], and [KeysPath] when
+// evaluating the same path expression against many roots, or when you need to
+// handle syntax errors without panicking:
 //
 //	p, err := query.Parse("Orders.*.Customer[Name=?*].Address")
 //	if err != nil {

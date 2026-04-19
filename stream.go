@@ -11,8 +11,8 @@ import (
 // encountered during decoding are accumulated and accessible via [Stream.Types]
 // at any point.
 //
-// A Stream is single-use: calling Values a second time returns an iterator
-// that yields nothing. It is not safe for concurrent use.
+// A Stream is single-use: calling Values a second time panics. It is not safe
+// for concurrent use.
 //
 // A Stream does not own its reader. The caller is responsible for closing the
 // underlying io.Reader if needed.
