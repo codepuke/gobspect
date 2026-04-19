@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -212,7 +212,7 @@ func redact(original string, char rune, textLength int) string {
 		if strings.ContainsRune(original, '\n') {
 			n = 3
 		} else {
-			n = len([]rune(original))
+			n = utf8.RuneCountInString(original)
 		}
 	}
 	return strings.Repeat(string(ch), n)
@@ -555,15 +555,19 @@ func fmtMapTo(w io.Writer, v MapValue, cfg *formatConfig, depth int) error {
 		keyed[i] = keyedEntry{canonKey: fmtPlainValue(e.Key, cfg, 0), entry: e}
 	}
 	if cfg.mapOrder != MapOrderInsertion {
-		sort.Slice(keyed, func(i, j int) bool {
-			return keyed[i].canonKey < keyed[j].canonKey
+		slices.SortFunc(keyed, func(a, b keyedEntry) int {
+			return strings.Compare(a.canonKey, b.canonKey)
 		})
 	}
 
 	// Attempt inline rendering: use plain text for threshold check so ANSI
 	// codes don't inflate the measured length.
+	noColor := pcfg == cfg // true when cfg already has no color scheme
 	plainParts := make([]string, 0, len(keyed))
-	colorParts := make([]string, 0, len(keyed))
+	var colorParts []string
+	if !noColor {
+		colorParts = make([]string, 0, len(keyed))
+	}
 	canInline := true
 	for _, ke := range keyed {
 		plainK := ke.canonKey
@@ -576,13 +580,15 @@ func fmtMapTo(w io.Writer, v MapValue, cfg *formatConfig, depth int) error {
 			break
 		}
 		plainParts = append(plainParts, plainK+": "+plainVV)
-		// Build the colored version.
-		colorK := fmtValue(ke.entry.Key, cfg, 0)
-		colorVV := fmtValue(ke.entry.Value, cfg, 0)
-		if cfg.redactKeys != nil && containsString(cfg.redactKeys.Keys, plainK) {
-			colorVV = redactWithKeyCfg(plainVV, *cfg.redactKeys)
+		if !noColor {
+			// Build the colored version only when a color scheme is active.
+			colorK := fmtValue(ke.entry.Key, cfg, 0)
+			colorVV := fmtValue(ke.entry.Value, cfg, 0)
+			if cfg.redactKeys != nil && containsString(cfg.redactKeys.Keys, plainK) {
+				colorVV = redactWithKeyCfg(plainVV, *cfg.redactKeys)
+			}
+			colorParts = append(colorParts, colorK+": "+colorVV)
 		}
-		colorParts = append(colorParts, colorK+": "+colorVV)
 	}
 	if canInline {
 		plainInline := header + "{" + strings.Join(plainParts, ", ") + "}"
@@ -591,6 +597,9 @@ func fmtMapTo(w io.Writer, v MapValue, cfg *formatConfig, depth int) error {
 			width = 72
 		}
 		if len(plainInline) <= width {
+			if noColor {
+				return writeStr(w, plainInline)
+			}
 			colorInline := cfg.color.TypeHeader.apply(header) +
 				cfg.color.CloseBrace.apply("{") +
 				strings.Join(colorParts, ", ") +
@@ -640,8 +649,12 @@ func fmtSliceTo(w io.Writer, v SliceValue, cfg *formatConfig, depth int) error {
 	}
 
 	pcfg := plainConfig(cfg)
+	noColor := pcfg == cfg
 	plainParts := make([]string, 0, len(v.Elems))
-	colorParts := make([]string, 0, len(v.Elems))
+	var colorParts []string
+	if !noColor {
+		colorParts = make([]string, 0, len(v.Elems))
+	}
 	canInline := true
 	for _, e := range v.Elems {
 		plain := fmtValue(e, pcfg, 0)
@@ -650,7 +663,9 @@ func fmtSliceTo(w io.Writer, v SliceValue, cfg *formatConfig, depth int) error {
 			break
 		}
 		plainParts = append(plainParts, plain)
-		colorParts = append(colorParts, fmtValue(e, cfg, 0))
+		if !noColor {
+			colorParts = append(colorParts, fmtValue(e, cfg, 0))
+		}
 	}
 	if canInline {
 		plainInline := header + "{" + strings.Join(plainParts, ", ") + "}"
@@ -659,6 +674,9 @@ func fmtSliceTo(w io.Writer, v SliceValue, cfg *formatConfig, depth int) error {
 			width = 72
 		}
 		if len(plainInline) <= width {
+			if noColor {
+				return writeStr(w, plainInline)
+			}
 			colorInline := cfg.color.TypeHeader.apply(header) +
 				cfg.color.CloseBrace.apply("{") +
 				strings.Join(colorParts, ", ") +
@@ -694,8 +712,12 @@ func fmtArrayTo(w io.Writer, v ArrayValue, cfg *formatConfig, depth int) error {
 	}
 
 	pcfg := plainConfig(cfg)
+	noColor := pcfg == cfg
 	plainParts := make([]string, 0, len(v.Elems))
-	colorParts := make([]string, 0, len(v.Elems))
+	var colorParts []string
+	if !noColor {
+		colorParts = make([]string, 0, len(v.Elems))
+	}
 	canInline := true
 	for _, e := range v.Elems {
 		plain := fmtValue(e, pcfg, 0)
@@ -704,7 +726,9 @@ func fmtArrayTo(w io.Writer, v ArrayValue, cfg *formatConfig, depth int) error {
 			break
 		}
 		plainParts = append(plainParts, plain)
-		colorParts = append(colorParts, fmtValue(e, cfg, 0))
+		if !noColor {
+			colorParts = append(colorParts, fmtValue(e, cfg, 0))
+		}
 	}
 	if canInline {
 		plainInline := header + "{" + strings.Join(plainParts, ", ") + "}"
@@ -713,6 +737,9 @@ func fmtArrayTo(w io.Writer, v ArrayValue, cfg *formatConfig, depth int) error {
 			width = 72
 		}
 		if len(plainInline) <= width {
+			if noColor {
+				return writeStr(w, plainInline)
+			}
 			colorInline := cfg.color.TypeHeader.apply(header) +
 				cfg.color.CloseBrace.apply("{") +
 				strings.Join(colorParts, ", ") +

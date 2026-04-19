@@ -3,7 +3,7 @@ package gobspect
 import (
 	"fmt"
 	"io"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -62,8 +62,8 @@ func FormatSchema(types []TypeInfo, opts ...FormatOption) *Schema {
 	}
 
 	// Sort alphabetically for deterministic, readable output.
-	sort.Slice(named, func(i, j int) bool {
-		return named[i].Name < named[j].Name
+	slices.SortFunc(named, func(a, b TypeInfo) int {
+		return strings.Compare(a.Name, b.Name)
 	})
 
 	schema := &Schema{Indent: cfg.indent}

@@ -71,6 +71,10 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 	heteroFlag := fs.String("hetero", "first", "heterogeneous-type handling for csv/tsv: first, reject, union, or partition")
 	limitFlag := fs.Int("limit", 0, "stop after N results (0 = no limit)")
 	offsetFlag := fs.Int("offset", 0, "skip the first N results")
+	sortFlag := fs.String("sort", "", "comma-separated column names to sort by")
+	sortDescFlag := fs.Bool("sort-desc", false, "reverse sort order for all keys")
+	sortFoldFlag := fs.Bool("sort-fold", false, "case-insensitive string comparison in sort")
+	sortDropFlag := fs.Bool("sort-drop-missing", false, "exclude rows missing all sort keys")
 
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -120,7 +124,7 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 	}
 
 	// Validate flags and combinations.
-	warnings, err := validateFlags(*schemaFlag, *typesFlag, queryExpr, *formatFlag, *indexFlag, *limitFlag, *offsetFlag, *compactFlag, *rawFlag, *colorFlag, *noColorFlag)
+	warnings, err := validateFlags(*schemaFlag, *typesFlag, queryExpr, *formatFlag, *indexFlag, *limitFlag, *offsetFlag, *compactFlag, *rawFlag, *colorFlag, *noColorFlag, *sortFlag, *sortDescFlag, *sortFoldFlag, *sortDropFlag)
 	if err != nil {
 		fmt.Fprintf(stderr, "gq: %v\n", err)
 		return 2
@@ -252,35 +256,57 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		}()
 	}
 
+	// Build sortSpec from -sort flags; zero value means no sort.
+	var sortSpec SortSpec
+	if *sortFlag != "" {
+		sortSpec, err = ParseSortSpec(*sortFlag, *sortDescFlag, *sortFoldFlag, *sortDropFlag)
+		if err != nil {
+			fmt.Fprintf(stderr, "gq: %v\n", err)
+			return 2
+		}
+	}
+
 	// Value mode: iterate the stream.
 	idx := 0
 	anyMatch := false
 	exitCode := 0
 	resultN := 0 // absolute index of each result across the whole stream
 
-outer:
-	for v, err := range stream.Values() {
-		if err != nil {
-			fmt.Fprintf(stderr, "gq: %v\n", err)
-			return 1
-		}
+	if len(sortSpec.Keys) > 0 {
+		// Sort path: collect ALL query results across ALL stream values, then
+		// sort and apply offset/limit to the sorted slice.
+		var allResults []gobspect.Value
+		for v, err := range stream.Values() {
+			if err != nil {
+				fmt.Fprintf(stderr, "gq: %v\n", err)
+				return 1
+			}
 
-		// --index filtering.
-		if *indexFlag >= 0 && idx != *indexFlag {
-			idx++
-			continue
-		}
-
-		// Apply query path and stream results lazily.
-		for result := range query.AllPathSeq(v, path) {
-			anyMatch = true // set before offset check so offset-past-end doesn't trigger path-not-found
-
-			pos := resultN
-			resultN++
-			if pos < *offsetFlag {
+			// --index filtering.
+			if *indexFlag >= 0 && idx != *indexFlag {
+				idx++
 				continue
 			}
 
+			for result := range query.AllPathSeq(v, path) {
+				anyMatch = true
+				allResults = append(allResults, result)
+			}
+
+			idx++
+
+			// If --index was specified and we just processed it, stop.
+			if *indexFlag >= 0 && idx > *indexFlag {
+				break
+			}
+		}
+
+		sorted := sortMatches(seqOf(allResults), sortSpec)
+
+		for pos, result := range sorted {
+			if pos < *offsetFlag {
+				continue
+			}
 			var writeErr error
 			if tp != nil {
 				writeErr = tp.WriteValue(result)
@@ -294,17 +320,61 @@ outer:
 				fmt.Fprintf(stderr, "gq: %v\n", writeErr)
 				return 1
 			}
-
-			if *limitFlag > 0 && resultN-*offsetFlag >= *limitFlag {
-				break outer
+			resultN++
+			if *limitFlag > 0 && resultN >= *limitFlag {
+				break
 			}
 		}
+	} else {
+		// Streaming path: existing behavior unchanged.
+	outer:
+		for v, err := range stream.Values() {
+			if err != nil {
+				fmt.Fprintf(stderr, "gq: %v\n", err)
+				return 1
+			}
 
-		idx++
+			// --index filtering.
+			if *indexFlag >= 0 && idx != *indexFlag {
+				idx++
+				continue
+			}
 
-		// If --index was specified and we just processed it, stop.
-		if *indexFlag >= 0 && idx > *indexFlag {
-			break
+			// Apply query path and stream results lazily.
+			for result := range query.AllPathSeq(v, path) {
+				anyMatch = true // set before offset check so offset-past-end doesn't trigger path-not-found
+
+				pos := resultN
+				resultN++
+				if pos < *offsetFlag {
+					continue
+				}
+
+				var writeErr error
+				if tp != nil {
+					writeErr = tp.WriteValue(result)
+				} else {
+					writeErr = printValue(result, stdout, *formatFlag, *rawFlag, *compactFlag, useColor, fmtOpts)
+				}
+				if writeErr != nil {
+					if errors.Is(writeErr, syscall.EPIPE) {
+						return 0
+					}
+					fmt.Fprintf(stderr, "gq: %v\n", writeErr)
+					return 1
+				}
+
+				if *limitFlag > 0 && resultN-*offsetFlag >= *limitFlag {
+					break outer
+				}
+			}
+
+			idx++
+
+			// If --index was specified and we just processed it, stop.
+			if *indexFlag >= 0 && idx > *indexFlag {
+				break
+			}
 		}
 	}
 
@@ -401,7 +471,7 @@ func isTerminal(f *os.File) bool {
 	return term.IsTerminal(int(f.Fd()))
 }
 
-func validateFlags(schema, types bool, queryExpr string, format string, index, limit, offset int, compact, raw, color, noColor bool) (warnings []string, err error) {
+func validateFlags(schema, types bool, queryExpr string, format string, index, limit, offset int, compact, raw, color, noColor bool, sort string, sortDesc, sortFold, sortDrop bool) (warnings []string, err error) {
 	if color && noColor {
 		return nil, fmt.Errorf("cannot use --color and --no-color together")
 	}
@@ -428,6 +498,9 @@ func validateFlags(schema, types bool, queryExpr string, format string, index, l
 	}
 	if raw && format != "pretty" {
 		warnings = append(warnings, fmt.Sprintf("-r has no effect with --format %s; ignoring", format))
+	}
+	if sort == "" && (sortDesc || sortFold || sortDrop) {
+		warnings = append(warnings, "-sort-* flags have no effect without -sort")
 	}
 	return warnings, nil
 }

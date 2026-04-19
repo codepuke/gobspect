@@ -296,16 +296,12 @@ func descendAll(v gobspect.Value) []gobspect.Value {
 		if len(n.Elems) == 0 {
 			return nil
 		}
-		out := make([]gobspect.Value, len(n.Elems))
-		copy(out, n.Elems)
-		return out
+		return n.Elems
 	case gobspect.ArrayValue:
 		if len(n.Elems) == 0 {
 			return nil
 		}
-		out := make([]gobspect.Value, len(n.Elems))
-		copy(out, n.Elems)
-		return out
+		return n.Elems
 	case gobspect.MapValue:
 		if len(n.Entries) == 0 {
 			return nil

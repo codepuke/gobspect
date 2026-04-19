@@ -68,6 +68,12 @@ Query expressions use dot-separated field names in the spirit of jq. A leading `
 | `-null-on-miss` | false | Print `null` instead of exiting 1 when a path is not found |
 | `-time-format` | RFC3339Nano | Go time layout for `time.Time` values |
 | `-hetero` | `first` | Heterogeneous-type handling for `csv`/`tsv`: `first`, `reject`, `union`, or `partition` (see below) |
+| `-limit N` | 0 | Stop after N results (0 = no limit) |
+| `-offset N` | 0 | Skip the first N results |
+| `-sort` | `""` | Comma-separated column names to sort by |
+| `-sort-desc` | `false` | Reverse sort order for all keys |
+| `-sort-fold` | `false` | Case-insensitive string comparison in sort |
+| `-sort-drop-missing` | `false` | Exclude rows missing all sort keys |
 
 Color is enabled automatically when stdout is a terminal and disabled when piping or redirecting.
 
@@ -220,6 +226,101 @@ type Order struct {
   Items     []LineItem
   PlacedAt  Time  // GobEncoder
 }
+```
+
+## Pagination
+
+`-offset` and `-limit` control which results are returned from the full match set.
+
+- `-offset N` skips the first N matches.
+- `-limit N` stops after N matches (0 means no limit).
+
+When `-sort` is not set, pagination follows **wire order** — the order in which values appear in the gob stream. This order is not guaranteed to be stable across re-encodings.
+
+When `-sort` is set, `-offset` and `-limit` apply to the **sorted result set**, making pagination stable across pages as long as the sort keys are unique (or the input is otherwise stable). See [Sorting](#sorting) below.
+
+```sh
+# First 10 results
+gq -limit 10 -f data.gob .Orders.*
+
+# Results 21–30
+gq -offset 20 -limit 10 -f data.gob .Orders.*
+```
+
+## Sorting
+
+`-sort` accepts a single column name or a comma-separated list of column names and sorts all matches before emitting output. Sorting works on match sets produced by both direct struct queries (`.Orders.*`) and [projection queries](#tabular--format-csv-and--format-tsv) (`.Items.*.SKU,Price,Address/Zip`).
+
+### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-sort` | `""` | Comma-separated column names to sort by |
+| `-sort-desc` | `false` | Reverse sort order for all keys |
+| `-sort-fold` | `false` | Case-insensitive string comparison in sort |
+| `-sort-drop-missing` | `false` | Exclude rows missing all sort keys |
+
+When `-sort-drop-missing` is false (the default), rows that are missing all sort keys sort as if the key were `nil` (lowest rank in ascending order). When true, those rows are excluded from output entirely.
+
+When `-sort-fold` is true, string comparisons use Go's Unicode case-folding tables. This is not locale-aware.
+
+### Kind-order total ordering
+
+Values of different kinds are ordered as follows:
+
+- `NilValue` < `BoolValue` < `IntValue`/`UintValue`/`FloatValue` (numeric) < `StringValue` < `BytesValue` < `OpaqueValue` < everything else
+
+Within the numeric group, values are compared by magnitude (cross-kind comparisons use `float64`; very large integers near the limits of `float64` precision may not compare exactly). Composite types (struct, map, slice, array) are compared by their formatted string representation and are documented as a last resort — not meaningful for most inputs.
+
+### Projection integration
+
+When a query uses the `/`-depth projection syntax, the projected column name is the **last `/`-component**. For example, `.Items.*.SKU,Address/Zip` produces a column named `Zip`, so `-sort Zip` matches it:
+
+```sh
+gq -sort Zip .Items.*.SKU,Price,Address/Zip
+```
+
+See the [Tabular](#tabular--format-csv-and--format-tsv) section for more on field projections.
+
+### Memory usage
+
+`-sort` **materializes all matches in memory** before emitting any output. For very large streams this may be infeasible. In that case, omit `-sort` and sort externally — for example, pipe CSV output through `sort(1)`:
+
+```sh
+gq -format csv -f data.gob .Orders.* | sort -t, -k2
+```
+
+### Interaction with pagination
+
+`-sort` combined with `-offset`/`-limit` paginates over **sorted** data. Without `-sort`, pagination follows wire order.
+
+```sh
+# Page 3 of results sorted by date (10 per page)
+gq -sort Date -offset 20 -limit 10 .Orders.*
+```
+
+### Interaction with `-hetero`
+
+- **`-hetero partition`**: the current implementation sorts across the full match set rather than within each partition. Per-partition sort is not yet implemented.
+- **`-hetero union`**: `-sort` sorts across the unified row set. Rows from an earlier type that lack a sort key introduced by a later type's expanded columns follow the `-sort-drop-missing` rule.
+
+### Examples
+
+```sh
+# Sort orders by customer name
+gq -sort Customer .Orders.*
+
+# Multi-key sort: status then date, descending
+gq -sort Status,Date -sort-desc .Orders.*
+
+# Paginate sorted results
+gq -sort Date -offset 20 -limit 10 .Orders.*
+
+# Sort projected columns (Address/Zip projects as column "Zip")
+gq -sort Zip .Items.*.SKU,Price,Address/Zip
+
+# Case-insensitive, drop records missing the sort field
+gq -sort Name -sort-fold -sort-drop-missing .People.*
 ```
 
 ## Exit codes
