@@ -29,13 +29,30 @@ type FieldDecl struct {
 	Annotation string
 }
 
+// SchemaFormatOption configures the rendering of a [Schema].
+// Unlike [FormatOption], which applies to value trees, SchemaFormatOption
+// covers only the subset of formatting options meaningful for type-declaration output.
+type SchemaFormatOption func(*formatConfig)
+
+// SchemaWithColor sets the [ColorScheme] used when rendering a Schema.
+// A zero-valued ColorScheme (the default) produces plain text identical to [Schema.String].
+func SchemaWithColor(scheme ColorScheme) SchemaFormatOption {
+	return func(c *formatConfig) { c.color = scheme }
+}
+
+// SchemaWithIndent sets the indentation string used inside struct bodies.
+// The default is two spaces.
+func SchemaWithIndent(indent string) SchemaFormatOption {
+	return func(c *formatConfig) { c.indent = indent }
+}
+
 // FormatSchema converts a []TypeInfo slice into an AST-based *Schema, covering
 // all top-level named types. Named types with mechanically generated names
 // (containing brackets, e.g. "[]int") are safely excluded from the top-level
 // schema output. Anonymous (unnamed) types appear only inline within other
 // declarations.
 //
-// To control rendering, pass [FormatOption] values to [Schema.Format] or
+// To control rendering, pass [SchemaFormatOption] values to [Schema.Format] or
 // [Schema.FormatTo] after calling FormatSchema.
 func FormatSchema(types []TypeInfo) *Schema {
 	// Build a lookup map keyed by type ID for resolving references.
@@ -74,19 +91,17 @@ func (s *Schema) String() string {
 	return s.Format()
 }
 
-// Format renders the Schema as a string, applying any provided FormatOptions.
-// Currently only [WithColor] and [WithIndent] are respected; other options are
-// silently ignored. A zero-valued [ColorScheme] (the default) produces plain
-// text identical to [Schema.String].
-func (s *Schema) Format(opts ...FormatOption) string {
+// Format renders the Schema as a string, applying any provided SchemaFormatOptions.
+// A zero-valued [ColorScheme] (the default) produces plain text identical to [Schema.String].
+func (s *Schema) Format(opts ...SchemaFormatOption) string {
 	var sb strings.Builder
 	_ = s.FormatTo(&sb, opts...)
 	return sb.String()
 }
 
-// FormatTo renders the Schema to w. The first write error aborts rendering and
-// is returned. Currently only [WithColor] and [WithIndent] are respected.
-func (s *Schema) FormatTo(w io.Writer, opts ...FormatOption) error {
+// FormatTo renders the Schema to w, applying any provided SchemaFormatOptions.
+// The first write error aborts rendering and is returned.
+func (s *Schema) FormatTo(w io.Writer, opts ...SchemaFormatOption) error {
 	cfg := &formatConfig{indent: s.Indent}
 	if cfg.indent == "" {
 		cfg.indent = "  "

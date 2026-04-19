@@ -509,7 +509,7 @@ type schemaOrder struct {
 }
 
 // schemaFor encodes v, drains the stream, and returns FormatSchema output.
-func schemaFor(tb testing.TB, v any, opts ...gobspect.FormatOption) string {
+func schemaFor(tb testing.TB, v any, opts ...gobspect.SchemaFormatOption) string {
 	tb.Helper()
 	buf := gobEncode(tb, v)
 	ins := gobspect.New()
@@ -579,7 +579,7 @@ func TestFormatSchema_Golden(t *testing.T) {
 
 func TestFormatSchema_WithIndent(t *testing.T) {
 	got := schemaFor(t, NamedPoint{Name: "x", Pt: Point{X: 1, Y: 2}},
-		gobspect.WithIndent("\t"))
+		gobspect.SchemaWithIndent("\t"))
 	assert.Contains(t, got, "\tName  string")
 	assert.Contains(t, got, "\tPt    Point")
 	assert.Contains(t, got, "\tX  int")
@@ -1537,7 +1537,7 @@ func TestSchema_Format_WithColor(t *testing.T) {
 	require.NoError(t, err)
 	schema := gobspect.FormatSchema(s.Types())
 
-	got := schema.Format(gobspect.WithColor(gobspect.ANSIColorScheme))
+	got := schema.Format(gobspect.SchemaWithColor(gobspect.ANSIColorScheme))
 
 	// Type names should be bold cyan.
 	assert.Contains(t, got, "\x1b[1;36m", "schema type name should be bold cyan")
@@ -1572,7 +1572,7 @@ func TestSchema_Format_WithIndent(t *testing.T) {
 	require.NoError(t, err)
 	schema := gobspect.FormatSchema(s.Types())
 
-	got := schema.Format(gobspect.WithIndent("\t"))
+	got := schema.Format(gobspect.SchemaWithIndent("\t"))
 
 	// Fields in the NamedPoint struct should be tab-indented.
 	assert.Contains(t, got, "\tName", "fields should be tab-indented")
@@ -1600,17 +1600,17 @@ func TestSchema_FormatTo_WritesCorrectly(t *testing.T) {
 	})
 
 	t.Run("with_indent_matches_format", func(t *testing.T) {
-		want := schema.Format(gobspect.WithIndent("\t"))
+		want := schema.Format(gobspect.SchemaWithIndent("\t"))
 		var out bytes.Buffer
-		werr := schema.FormatTo(&out, gobspect.WithIndent("\t"))
+		werr := schema.FormatTo(&out, gobspect.SchemaWithIndent("\t"))
 		require.NoError(t, werr)
 		assert.Equal(t, want, out.String(), "FormatTo with WithIndent must be byte-identical to Format with WithIndent")
 	})
 
 	t.Run("with_color_matches_format", func(t *testing.T) {
-		want := schema.Format(gobspect.WithColor(gobspect.ANSIColorScheme))
+		want := schema.Format(gobspect.SchemaWithColor(gobspect.ANSIColorScheme))
 		var out bytes.Buffer
-		werr := schema.FormatTo(&out, gobspect.WithColor(gobspect.ANSIColorScheme))
+		werr := schema.FormatTo(&out, gobspect.SchemaWithColor(gobspect.ANSIColorScheme))
 		require.NoError(t, werr)
 		assert.Equal(t, want, out.String(), "FormatTo with WithColor must be byte-identical to Format with WithColor")
 	})

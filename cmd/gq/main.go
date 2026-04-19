@@ -124,7 +124,7 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 	}
 
 	// Validate flags and combinations.
-	warnings, err := validateFlags(*schemaFlag, *typesFlag, queryExpr, *formatFlag, *indexFlag, *limitFlag, *offsetFlag, *compactFlag, *rawFlag, *colorFlag, *noColorFlag, *sortFlag, *sortDescFlag, *sortFoldFlag, *sortDropFlag)
+	warnings, err := validateFlags(*schemaFlag, *typesFlag, queryExpr, *formatFlag, *indexFlag, *limitFlag, *offsetFlag, *compactFlag, *rawFlag, *colorFlag, *noColorFlag, *sortFlag, *sortDescFlag, *sortFoldFlag, *sortDropFlag, *nullOnMissFlag, *timeFormatFlag)
 	if err != nil {
 		fmt.Fprintf(stderr, "gq: %v\n", err)
 		return 2
@@ -196,7 +196,7 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		}
 		var s string
 		if useColor {
-			s = schema.Format(gobspect.WithColor(gobspect.ANSIColorScheme))
+			s = schema.Format(gobspect.SchemaWithColor(gobspect.ANSIColorScheme))
 		} else {
 			s = schema.String()
 		}
@@ -471,7 +471,7 @@ func isTerminal(f *os.File) bool {
 	return term.IsTerminal(int(f.Fd()))
 }
 
-func validateFlags(schema, types bool, queryExpr string, format string, index, limit, offset int, compact, raw, color, noColor bool, sort string, sortDesc, sortFold, sortDrop bool) (warnings []string, err error) {
+func validateFlags(schema, types bool, queryExpr string, format string, index, limit, offset int, compact, raw, color, noColor bool, sort string, sortDesc, sortFold, sortDrop bool, nullOnMiss bool, timeFormat string) (warnings []string, err error) {
 	if color && noColor {
 		return nil, fmt.Errorf("cannot use -color and -no-color together")
 	}
@@ -484,8 +484,14 @@ func validateFlags(schema, types bool, queryExpr string, format string, index, l
 	if schema && format != "pretty" {
 		warnings = append(warnings, fmt.Sprintf("-format %s has no effect with -schema; ignoring", format))
 	}
+	if types && format != "pretty" {
+		warnings = append(warnings, fmt.Sprintf("-format %s has no effect with -types; ignoring", format))
+	}
 	if schema && index >= 0 {
 		warnings = append(warnings, "-index has no effect with -schema; ignoring")
+	}
+	if types && index >= 0 {
+		warnings = append(warnings, "-index has no effect with -types; ignoring")
 	}
 	if schema && (limit > 0 || offset > 0) {
 		warnings = append(warnings, "-limit/-offset has no effect with -schema; ignoring")
@@ -499,8 +505,26 @@ func validateFlags(schema, types bool, queryExpr string, format string, index, l
 	if raw && format != "pretty" {
 		warnings = append(warnings, fmt.Sprintf("-r has no effect with -format %s; ignoring", format))
 	}
+	if schema && sort != "" {
+		warnings = append(warnings, "-sort has no effect with -schema; ignoring")
+	}
+	if types && sort != "" {
+		warnings = append(warnings, "-sort has no effect with -types; ignoring")
+	}
 	if sort == "" && (sortDesc || sortFold || sortDrop) {
 		warnings = append(warnings, "-sort-* flags have no effect without -sort")
+	}
+	if schema && nullOnMiss {
+		warnings = append(warnings, "-null-on-miss has no effect with -schema; ignoring")
+	}
+	if types && nullOnMiss {
+		warnings = append(warnings, "-null-on-miss has no effect with -types; ignoring")
+	}
+	if schema && timeFormat != "" {
+		warnings = append(warnings, "-time-format has no effect with -schema; ignoring")
+	}
+	if types && timeFormat != "" {
+		warnings = append(warnings, "-time-format has no effect with -types; ignoring")
 	}
 	return warnings, nil
 }

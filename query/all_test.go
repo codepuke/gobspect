@@ -1102,3 +1102,21 @@ func TestAllPathSeq_EarlyBreak(t *testing.T) {
 	// Exactly 3 results were returned, not all 10.
 	require.Len(t, collected, 3)
 }
+
+// — TestMustAll ———————————————————————————————————————————————————————————————
+
+func TestMustAll_ReturnsMatches(t *testing.T) {
+	root := makeStruct("Root", field_("Items", makeSlice(makeString("a"), makeString("b"))))
+	got := MustAll(root, "Items.*")
+	require.Equal(t, []gobspect.Value{makeString("a"), makeString("b")}, got)
+}
+
+func TestMustAll_PanicsOnNoMatch(t *testing.T) {
+	root := makeStruct("Root", field_("Items", makeSlice(makeString("a"))))
+	assert.Panics(t, func() { MustAll(root, "Missing.*") })
+}
+
+func TestMustAll_PanicsOnSyntaxError(t *testing.T) {
+	root := makeString("x")
+	assert.Panics(t, func() { MustAll(root, ".bad[") })
+}

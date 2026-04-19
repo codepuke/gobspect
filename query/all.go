@@ -44,6 +44,20 @@ func All(root gobspect.Value, expr string) []gobspect.Value {
 	return AllPath(root, p)
 }
 
+// MustAll is like All but also panics if the path matches nothing.
+// Intended for tests and scripts where the data shape is known.
+func MustAll(root gobspect.Value, expr string) []gobspect.Value {
+	p, err := Parse(expr)
+	if err != nil {
+		panic(fmt.Sprintf("query.MustAll: invalid path expression %q: %v", expr, err))
+	}
+	results := AllPath(root, p)
+	if len(results) == 0 {
+		panic(fmt.Sprintf("query.MustAll: path %q matched nothing", expr))
+	}
+	return results
+}
+
 // allWalkSeq is the lazy counterpart to allWalk. It calls yield for each
 // matching value and returns false as soon as yield returns false (early
 // termination). Returns false if the caller requested an early stop.

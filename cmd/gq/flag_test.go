@@ -78,6 +78,54 @@ func TestFlagValidation(t *testing.T) {
 			wantExit:   0,
 			wantStderr: []string{"gq: -r has no effect with -format csv; ignoring"},
 		},
+		{
+			name:       "types with format json",
+			args:       []string{"-types", "-format", "json", "-f", tmpFile.Name()},
+			wantExit:   0,
+			wantStderr: []string{"gq: -format json has no effect with -types; ignoring"},
+		},
+		{
+			name:       "types with index",
+			args:       []string{"-types", "-index", "0", "-f", tmpFile.Name()},
+			wantExit:   0,
+			wantStderr: []string{"gq: -index has no effect with -types; ignoring"},
+		},
+		{
+			name:       "schema with sort",
+			args:       []string{"-schema", "-sort", "Name", "-f", tmpFile.Name()},
+			wantExit:   0,
+			wantStderr: []string{"gq: -sort has no effect with -schema; ignoring"},
+		},
+		{
+			name:       "types with sort",
+			args:       []string{"-types", "-sort", "Name", "-f", tmpFile.Name()},
+			wantExit:   0,
+			wantStderr: []string{"gq: -sort has no effect with -types; ignoring"},
+		},
+		{
+			name:       "schema with null-on-miss",
+			args:       []string{"-schema", "-null-on-miss", "-f", tmpFile.Name()},
+			wantExit:   0,
+			wantStderr: []string{"gq: -null-on-miss has no effect with -schema; ignoring"},
+		},
+		{
+			name:       "types with null-on-miss",
+			args:       []string{"-types", "-null-on-miss", "-f", tmpFile.Name()},
+			wantExit:   0,
+			wantStderr: []string{"gq: -null-on-miss has no effect with -types; ignoring"},
+		},
+		{
+			name:       "schema with time-format",
+			args:       []string{"-schema", "-time-format", "2006-01-02", "-f", tmpFile.Name()},
+			wantExit:   0,
+			wantStderr: []string{"gq: -time-format has no effect with -schema; ignoring"},
+		},
+		{
+			name:       "types with time-format",
+			args:       []string{"-types", "-time-format", "2006-01-02", "-f", tmpFile.Name()},
+			wantExit:   0,
+			wantStderr: []string{"gq: -time-format has no effect with -types; ignoring"},
+		},
 	}
 
 	for _, tt := range tests {

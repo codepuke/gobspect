@@ -34,15 +34,17 @@
 //
 // # One-off functions
 //
-// [Get], [All], [AllSeq], [Keys], and [MustGet] accept a path expression as a
-// plain string and panic if the expression is syntactically invalid. This is
-// intentional: these functions are designed for call sites where the path is a
-// compile-time constant and a bad expression is a programming error.
+// [Get], [All], [AllSeq], [Keys], [MustGet], and [MustAll] accept a path
+// expression as a plain string and panic if the expression is syntactically
+// invalid. This is intentional: these functions are designed for call sites
+// where the path is a compile-time constant and a bad expression is a
+// programming error.
 //
 //	v, ok   := query.Get(root, "Orders.0.Customer.Name")
 //	names   := query.All(root, "Orders.*.Customer.Name")
 //	keys, _ := query.Keys(root, "")
 //	name    := query.MustGet(root, "Orders.0.Customer.Name") // panics if not found
+//	items   := query.MustAll(root, "Orders.*.Items.*")       // panics if nothing matched
 //
 // # Pre-compiled paths
 //

@@ -313,11 +313,6 @@ func (tp *tabularPrinter) Flush() error {
 	return tp.w.Error()
 }
 
-// Error returns any error from the underlying CSV writer.
-func (tp *tabularPrinter) Error() error {
-	return tp.w.Error()
-}
-
 // fieldNames extracts field names from a Fields slice.
 func fieldNames(fields []gobspect.Field) []string {
 	names := make([]string, len(fields))

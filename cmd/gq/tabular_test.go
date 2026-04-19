@@ -88,8 +88,7 @@ func TestTabularPrinterCSVStruct(t *testing.T) {
 	}
 
 	require.NoError(t, tp.WriteValue(sv))
-	tp.Flush()
-	require.NoError(t, tp.Error())
+	require.NoError(t, tp.Flush())
 
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	require.Len(t, lines, 2, "should have header + 1 data row")
@@ -257,8 +256,7 @@ func TestTabularPrinter_SparseStructsFromSameType(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, tp.WriteValue(v))
 	}
-	tp.Flush()
-	require.NoError(t, tp.Error())
+	require.NoError(t, tp.Flush())
 
 	r := csv.NewReader(strings.NewReader(out.String()))
 	rows, err := r.ReadAll()
@@ -394,8 +392,7 @@ func TestTabularPrinter_BytesRespectsFormat(t *testing.T) {
 				},
 			}
 			require.NoError(t, tp.WriteValue(sv))
-			tp.Flush()
-			require.NoError(t, tp.Error())
+			require.NoError(t, tp.Flush())
 
 			// Parse via CSV reader to handle any quoting the writer may have applied.
 			r := csv.NewReader(strings.NewReader(buf.String()))
@@ -446,8 +443,7 @@ func TestTabularPrinter_FirstWins(t *testing.T) {
 	require.NoError(t, tp.WriteValue(makePoint(100, 1, 2, 3)))
 	require.NoError(t, tp.WriteValue(makeOrder(200, 7, 9.99))) // should be silently dropped
 	require.NoError(t, tp.WriteValue(makePoint(100, 4, 5, 6)))
-	tp.Flush()
-	require.NoError(t, tp.Error())
+	require.NoError(t, tp.Flush())
 
 	r := csv.NewReader(strings.NewReader(buf.String()))
 	rows, err := r.ReadAll()
@@ -481,8 +477,7 @@ func TestTabularPrinter_Union(t *testing.T) {
 	require.NoError(t, tp.WriteValue(makePoint(100, 1, 2, 3)))
 	require.NoError(t, tp.WriteValue(makeOrder(200, 7, 9.99))) // adds ID, Total columns
 	require.NoError(t, tp.WriteValue(makePoint(100, 4, 5, 6)))
-	tp.Flush()
-	require.NoError(t, tp.Error())
+	require.NoError(t, tp.Flush())
 
 	// The output contains multiple header rows: the initial one and the grown
 	// one. Parse raw lines to check structure.
@@ -515,8 +510,7 @@ func TestTabularPrinter_Partition(t *testing.T) {
 	require.NoError(t, tp.WriteValue(makePoint(100, 4, 5, 6)))
 	require.NoError(t, tp.WriteValue(makeOrder(200, 7, 9.99)))
 	require.NoError(t, tp.WriteValue(makeOrder(200, 8, 19.50)))
-	tp.Flush()
-	require.NoError(t, tp.Error())
+	require.NoError(t, tp.Flush())
 
 	output := buf.String()
 
@@ -579,8 +573,7 @@ func TestProjectionBypassesHeteroCheck(t *testing.T) {
 			tp := newTabularPrinter(&out, withDelimiter(','), withHeterogeneousMode(mm.mode))
 			require.NoError(t, tp.WriteValue(sv1), "first projection row must not error")
 			require.NoError(t, tp.WriteValue(sv2), "second projection row must not error")
-			tp.Flush()
-			require.NoError(t, tp.Error())
+			require.NoError(t, tp.Flush())
 
 			r := csv.NewReader(strings.NewReader(out.String()))
 			rows, err := r.ReadAll()
