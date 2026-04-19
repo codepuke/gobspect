@@ -140,7 +140,7 @@ func (tp *tabularPrinter) cellString(v gobspect.Value) string {
 }
 
 // WriteValue writes a single Value as a tabular row. On the first call it also
-// emits a header row (unless --no-headers was set).
+// emits a header row (unless -no-headers was set).
 func (tp *tabularPrinter) WriteValue(v gobspect.Value) error {
 	// Unwrap InterfaceValue so we see the concrete type.
 	if iv, ok := v.(gobspect.InterfaceValue); ok {

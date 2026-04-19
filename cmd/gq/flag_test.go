@@ -32,51 +32,51 @@ func TestFlagValidation(t *testing.T) {
 	}{
 		{
 			name:       "schema with query",
-			args:       []string{"--schema", "-f", tmpFile.Name(), ".Foo"},
+			args:       []string{"-schema", "-f", tmpFile.Name(), ".Foo"},
 			wantExit:   0, // Warn and continue
-			wantStderr: []string{"gq: query expression has no effect with --schema; ignoring"},
+			wantStderr: []string{"gq: query expression has no effect with -schema; ignoring"},
 		},
 		{
 			name:       "types with query",
-			args:       []string{"--types", "-f", tmpFile.Name(), ".Foo"},
+			args:       []string{"-types", "-f", tmpFile.Name(), ".Foo"},
 			wantExit:   0, // Warn and continue
-			wantStderr: []string{"gq: query expression has no effect with --types; ignoring"},
+			wantStderr: []string{"gq: query expression has no effect with -types; ignoring"},
 		},
 		{
 			name:       "schema with format json",
-			args:       []string{"--schema", "--format", "json", "-f", tmpFile.Name()},
+			args:       []string{"-schema", "-format", "json", "-f", tmpFile.Name()},
 			wantExit:   0,
-			wantStderr: []string{"gq: --format json has no effect with --schema; ignoring"},
+			wantStderr: []string{"gq: -format json has no effect with -schema; ignoring"},
 		},
 		{
 			name:       "schema with index",
-			args:       []string{"--schema", "--index", "0", "-f", tmpFile.Name()},
+			args:       []string{"-schema", "-index", "0", "-f", tmpFile.Name()},
 			wantExit:   0,
-			wantStderr: []string{"gq: --index has no effect with --schema; ignoring"},
+			wantStderr: []string{"gq: -index has no effect with -schema; ignoring"},
 		},
 		{
 			name:       "color and no-color",
-			args:       []string{"--color", "--no-color", "-f", tmpFile.Name()},
+			args:       []string{"-color", "-no-color", "-f", tmpFile.Name()},
 			wantExit:   2,
-			wantStderr: []string{"gq: cannot use --color and --no-color together"},
+			wantStderr: []string{"gq: cannot use -color and -no-color together"},
 		},
 		{
 			name:       "compact with csv",
-			args:       []string{"--compact", "--format", "csv", "-f", tmpFile.Name()},
+			args:       []string{"-compact", "-format", "csv", "-f", tmpFile.Name()},
 			wantExit:   0,
-			wantStderr: []string{"gq: --compact has no effect with --format csv; ignoring"},
+			wantStderr: []string{"gq: -compact has no effect with -format csv; ignoring"},
 		},
 		{
 			name:       "raw with json",
-			args:       []string{"-r", "--format", "json", "-f", tmpFile.Name()},
+			args:       []string{"-r", "-format", "json", "-f", tmpFile.Name()},
 			wantExit:   0,
-			wantStderr: []string{"gq: -r has no effect with --format json; ignoring"},
+			wantStderr: []string{"gq: -r has no effect with -format json; ignoring"},
 		},
 		{
 			name:       "raw with csv",
-			args:       []string{"-r", "--format", "csv", "-f", tmpFile.Name()},
+			args:       []string{"-r", "-format", "csv", "-f", tmpFile.Name()},
 			wantExit:   0,
-			wantStderr: []string{"gq: -r has no effect with --format csv; ignoring"},
+			wantStderr: []string{"gq: -r has no effect with -format csv; ignoring"},
 		},
 	}
 
@@ -379,14 +379,14 @@ func TestRun_LimitOffset(t *testing.T) {
 			args:       []string{"-limit", "-1"},
 			n:          1,
 			wantExit:   2,
-			wantStderr: "--limit must be non-negative",
+			wantStderr: "-limit must be non-negative",
 		},
 		{
 			name:       "negative offset is error",
 			args:       []string{"-offset", "-1"},
 			n:          1,
 			wantExit:   2,
-			wantStderr: "--offset must be non-negative",
+			wantStderr: "-offset must be non-negative",
 		},
 	}
 

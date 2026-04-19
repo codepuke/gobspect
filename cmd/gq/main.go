@@ -6,10 +6,10 @@
 //
 // With no arguments, reads from stdin and prints all top-level values.
 // With one positional argument, it is the query expression; input comes from
-// --file or stdin.
+// -file or stdin.
 // Two or more positional arguments is an error.
 //
-// Use -f / --file to specify an input file. Without it, stdin is used.
+// Use -f / -file to specify an input file. Without it, stdin is used.
 //
 // Query expressions use the gobspect/query path syntax (dot-separated field
 // names, integer indices, wildcards, filters). An empty or "." expression is
@@ -20,8 +20,8 @@
 //	gq -f data.gob
 //	gq -f data.gob .Header.Timestamp
 //	cat data.gob | gq .Items.*
-//	gq --schema -f data.gob
-//	gq --format json -f data.gob .Name
+//	gq -schema -f data.gob
+//	gq -format json -f data.gob .Name
 package main
 
 import (
@@ -54,7 +54,7 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 	}
 
 	fileFlag := fs.String("file", "", "input file (default: stdin)")
-	fs.StringVar(fileFlag, "f", "", "input file (shorthand for --file)")
+	fs.StringVar(fileFlag, "f", "", "input file (shorthand for -file)")
 	formatFlag := fs.String("format", "pretty", "output format: pretty, json, csv, or tsv")
 	schemaFlag := fs.Bool("schema", false, "print Go-style type schema and exit")
 	typesFlag := fs.Bool("types", false, "print type definitions as JSON and exit")
@@ -83,13 +83,13 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 	args = fs.Args()
 
 	// Resolve queryExpr and inputPath from positional arguments.
-	// Positional args are always query expressions; use -f/--file for the input file.
+	// Positional args are always query expressions; use -f/-file for the input file.
 	var queryExpr string
 	inputPath := *fileFlag // empty = stdin
 
 	switch len(args) {
 	case 0:
-		// No args: identity query, use --file or stdin.
+		// No args: identity query, use -file or stdin.
 	case 1:
 		// One arg: it is the query expression.
 		queryExpr = args[0]
@@ -107,19 +107,19 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		queryExpr = queryExpr[1:]
 	}
 
-	// Parse --hetero before flag validation so we can reject bad values early.
+	// Parse -hetero before flag validation so we can reject bad values early.
 	heteroMode, heteroOK := parseHeteroMode(*heteroFlag)
 	if !heteroOK {
-		fmt.Fprintf(stderr, "gq: unknown --hetero value %q; use first, reject, union, or partition\n", *heteroFlag)
+		fmt.Fprintf(stderr, "gq: unknown -hetero value %q; use first, reject, union, or partition\n", *heteroFlag)
 		return 2
 	}
 
 	if *limitFlag < 0 {
-		fmt.Fprintln(stderr, "gq: --limit must be non-negative")
+		fmt.Fprintln(stderr, "gq: -limit must be non-negative")
 		return 2
 	}
 	if *offsetFlag < 0 {
-		fmt.Fprintln(stderr, "gq: --offset must be non-negative")
+		fmt.Fprintln(stderr, "gq: -offset must be non-negative")
 		return 2
 	}
 
@@ -164,16 +164,16 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 	// Resolve format options.
 	bytesFormat, ok := parseBytesFormat(*bytesFlag)
 	if !ok {
-		fmt.Fprintf(stderr, "gq: unknown --bytes value %q; use hex, base64, or literal\n", *bytesFlag)
+		fmt.Fprintf(stderr, "gq: unknown -bytes value %q; use hex, base64, or literal\n", *bytesFlag)
 		return 2
 	}
 
-	// Validate --format.
+	// Validate -format.
 	switch *formatFlag {
 	case "pretty", "json", "csv", "tsv":
 		// ok
 	default:
-		fmt.Fprintf(stderr, "gq: unknown --format value %q; use pretty, json, csv, or tsv\n", *formatFlag)
+		fmt.Fprintf(stderr, "gq: unknown -format value %q; use pretty, json, csv, or tsv\n", *formatFlag)
 		return 2
 	}
 
@@ -473,34 +473,34 @@ func isTerminal(f *os.File) bool {
 
 func validateFlags(schema, types bool, queryExpr string, format string, index, limit, offset int, compact, raw, color, noColor bool, sort string, sortDesc, sortFold, sortDrop bool) (warnings []string, err error) {
 	if color && noColor {
-		return nil, fmt.Errorf("cannot use --color and --no-color together")
+		return nil, fmt.Errorf("cannot use -color and -no-color together")
 	}
 	if schema && queryExpr != "" {
-		warnings = append(warnings, "query expression has no effect with --schema; ignoring")
+		warnings = append(warnings, "query expression has no effect with -schema; ignoring")
 	}
 	if types && queryExpr != "" {
-		warnings = append(warnings, "query expression has no effect with --types; ignoring")
+		warnings = append(warnings, "query expression has no effect with -types; ignoring")
 	}
 	if schema && format != "pretty" {
-		warnings = append(warnings, fmt.Sprintf("--format %s has no effect with --schema; ignoring", format))
+		warnings = append(warnings, fmt.Sprintf("-format %s has no effect with -schema; ignoring", format))
 	}
 	if schema && index >= 0 {
-		warnings = append(warnings, "--index has no effect with --schema; ignoring")
+		warnings = append(warnings, "-index has no effect with -schema; ignoring")
 	}
 	if schema && (limit > 0 || offset > 0) {
-		warnings = append(warnings, "--limit/--offset has no effect with --schema; ignoring")
+		warnings = append(warnings, "-limit/-offset has no effect with -schema; ignoring")
 	}
 	if types && (limit > 0 || offset > 0) {
-		warnings = append(warnings, "--limit/--offset has no effect with --types; ignoring")
+		warnings = append(warnings, "-limit/-offset has no effect with -types; ignoring")
 	}
 	if compact && format != "json" {
-		warnings = append(warnings, fmt.Sprintf("--compact has no effect with --format %s; ignoring", format))
+		warnings = append(warnings, fmt.Sprintf("-compact has no effect with -format %s; ignoring", format))
 	}
 	if raw && format != "pretty" {
-		warnings = append(warnings, fmt.Sprintf("-r has no effect with --format %s; ignoring", format))
+		warnings = append(warnings, fmt.Sprintf("-r has no effect with -format %s; ignoring", format))
 	}
 	if sort == "" && (sortDesc || sortFold || sortDrop) {
-		warnings = append(warnings, "--sort-* flags have no effect without --sort")
+		warnings = append(warnings, "-sort-* flags have no effect without -sort")
 	}
 	return warnings, nil
 }
