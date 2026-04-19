@@ -93,11 +93,11 @@ func (vd *valueDecoder) decodeFieldValue(typeID int, r *messageReader) (Value, e
 	case def.ArrayT != nil:
 		return vd.decodeArrayValue(typeID, def.ArrayT, r)
 	case def.GobEncoderT != nil:
-		return vd.decodeOpaqueValue(def.GobEncoderT.Common.Name, "gob", r)
+		return vd.decodeOpaqueValue(typeID, def.GobEncoderT.Common.Name, "gob", r)
 	case def.BinaryMarshalerT != nil:
-		return vd.decodeOpaqueValue(def.BinaryMarshalerT.Common.Name, "binary", r)
+		return vd.decodeOpaqueValue(typeID, def.BinaryMarshalerT.Common.Name, "binary", r)
 	case def.TextMarshalerT != nil:
-		return vd.decodeOpaqueValue(def.TextMarshalerT.Common.Name, "text", r)
+		return vd.decodeOpaqueValue(typeID, def.TextMarshalerT.Common.Name, "text", r)
 	default:
 		return nil, fmt.Errorf("gob: wireTypeDef for ID %d has no recognised variant", typeID)
 	}
@@ -291,7 +291,7 @@ func (vd *valueDecoder) decodeArrayValue(typeID int, def *wireArrayType, r *mess
 
 // decodeOpaqueValue reads an opaque blob (GobEncoder, BinaryMarshaler, or
 // TextMarshaler). The wire encoding is uint(length) + raw bytes.
-func (vd *valueDecoder) decodeOpaqueValue(typeName, encoding string, r io.ByteReader) (Value, error) {
+func (vd *valueDecoder) decodeOpaqueValue(typeID int, typeName, encoding string, r io.ByteReader) (Value, error) {
 	n, err := decodeUint(r)
 	if err != nil {
 		return nil, err
@@ -301,9 +301,10 @@ func (vd *valueDecoder) decodeOpaqueValue(typeName, encoding string, r io.ByteRe
 		return nil, err
 	}
 	ov := OpaqueValue{
-		TypeName: typeName,
-		Encoding: encoding,
-		Raw:      raw,
+		TypeName:  typeName,
+		GobTypeID: typeID,
+		Encoding:  encoding,
+		Raw:       raw,
 	}
 	if encoding == "text" {
 		// TextMarshaler blobs are always valid UTF-8 strings by contract.

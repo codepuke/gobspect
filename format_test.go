@@ -304,7 +304,7 @@ type redactNestedOuter struct {
 }
 
 // TestFormat_WithRedactKeys_NestedStructMultiLine documents and tests the
-// behaviour when a redacted field renders as a multi-line struct.
+// behavior when a redacted field renders as a multi-line struct.
 //
 // Decision: when TextLength == 0 and the rendered value is multi-line, redact
 // emits a short fixed placeholder ("***", 3 chars) rather than counting the
@@ -326,7 +326,7 @@ func TestFormat_WithRedactKeys_NestedStructMultiLine(t *testing.T) {
 		assert.Equal(t, "redactNestedOuter{\n  Public: \"visible\"\n  Inner: ***\n}", got)
 		assert.NotContains(t, got, "topsecret")
 		assert.NotContains(t, got, "alsoSecret")
-		// Must not produce a long run of asterisks (old buggy behaviour was 71+).
+		// Must not produce a long run of asterisks (old buggy behavior was 71+).
 		assert.NotContains(t, got, "****")
 	})
 
@@ -516,7 +516,7 @@ func schemaFor(tb testing.TB, v any, opts ...gobspect.FormatOption) string {
 	s := ins.Stream(buf)
 	_, err := s.Collect()
 	require.NoError(tb, err)
-	return gobspect.FormatSchema(s.Types(), opts...).String()
+	return gobspect.FormatSchema(s.Types()).Format(opts...)
 }
 
 // readGolden reads a golden file from the testdata directory.

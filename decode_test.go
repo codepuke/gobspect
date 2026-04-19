@@ -219,7 +219,7 @@ func TestDecodeTypes_EmptyStream(t *testing.T) {
 func TestMaxBytes_LimitExceeded(t *testing.T) {
 	// Encode a non-trivial value, then decode with MaxBytes set smaller than the stream.
 	buf := gobEncode(t, NamedPoint{Name: "hello world", Pt: Point{X: 100, Y: 200}})
-	ins := gobspect.New(gobspect.WithOptions(gobspect.Options{MaxBytes: 5}))
+	ins := gobspect.New(gobspect.WithReadLimit(5))
 	_, err := ins.Stream(buf).Collect()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "MaxBytes")
@@ -228,7 +228,7 @@ func TestMaxBytes_LimitExceeded(t *testing.T) {
 func TestMaxBytes_Zero_Unlimited(t *testing.T) {
 	// MaxBytes:0 (default) imposes no limit.
 	buf := gobEncode(t, NamedPoint{Name: "hello world", Pt: Point{X: 100, Y: 200}})
-	ins := gobspect.New(gobspect.WithOptions(gobspect.Options{MaxBytes: 0}))
+	ins := gobspect.New(gobspect.WithReadLimit(0))
 	vals, err := ins.Stream(buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 1)
@@ -255,7 +255,7 @@ func TestMaxBytes_ReadByteBoundary(t *testing.T) {
 	// `boundary` bytes after value1.  The next ReadByte call (for value2's
 	// length prefix) increments cr.n to boundary+1, exceeding the limit.
 	// The error must surface cleanly via ReadByte, not be silently swallowed.
-	ins := gobspect.New(gobspect.WithOptions(gobspect.Options{MaxBytes: boundary}))
+	ins := gobspect.New(gobspect.WithReadLimit(boundary))
 	vals, err := ins.Stream(bytes.NewReader(multiBytes)).Collect()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "MaxBytes",
@@ -270,7 +270,7 @@ func TestMaxBytes_PartialResults(t *testing.T) {
 	buf := gobEncodeMultiple(t, Point{X: 1, Y: 2}, NamedPoint{Name: "toolong", Pt: Point{3, 4}})
 	totalLen := buf.Len()
 	// Set limit between the two messages so the first succeeds.
-	ins := gobspect.New(gobspect.WithOptions(gobspect.Options{MaxBytes: int64(totalLen / 2)}))
+	ins := gobspect.New(gobspect.WithReadLimit(int64(totalLen / 2)))
 	s := ins.Stream(buf)
 	values, err := s.Collect()
 	require.Error(t, err)

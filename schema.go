@@ -35,14 +35,9 @@ type FieldDecl struct {
 // schema output. Anonymous (unnamed) types appear only inline within other
 // declarations.
 //
-// The only FormatOption currently respected is [WithIndent] when formatted; all
-// others are silently ignored.
-func FormatSchema(types []TypeInfo, opts ...FormatOption) *Schema {
-	cfg := &formatConfig{indent: "  "}
-	for _, o := range opts {
-		o(cfg)
-	}
-
+// To control rendering, pass [FormatOption] values to [Schema.Format] or
+// [Schema.FormatTo] after calling FormatSchema.
+func FormatSchema(types []TypeInfo) *Schema {
 	// Build a lookup map keyed by type ID for resolving references.
 	byID := make(map[int]TypeInfo, len(types))
 	for _, ti := range types {
@@ -66,7 +61,7 @@ func FormatSchema(types []TypeInfo, opts ...FormatOption) *Schema {
 		return strings.Compare(a.Name, b.Name)
 	})
 
-	schema := &Schema{Indent: cfg.indent}
+	schema := &Schema{Indent: "  "}
 	for _, ti := range named {
 		schema.Types = append(schema.Types, buildTypeDecl(ti, byID))
 	}
@@ -110,15 +105,6 @@ func (s *Schema) TypeByName(name string) (*TypeDecl, bool) {
 		}
 	}
 	return nil, false
-}
-
-// FormatString renders the schema with the given indentation string.
-// Deprecated: prefer [Schema.Format] with [WithIndent].
-func (s *Schema) FormatString(indent string) string {
-	if indent == "" {
-		indent = "  "
-	}
-	return s.Format(WithIndent(indent))
 }
 
 // schemaFormatTo writes the Schema to w using the given formatConfig for indent

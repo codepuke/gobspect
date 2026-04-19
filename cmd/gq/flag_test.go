@@ -327,7 +327,7 @@ func TestRun_NoOsStatAmbiguity(t *testing.T) {
 	assert.Contains(t, stdout.String(), "pending", "expected field value from stdin")
 }
 
-// TestRun_LimitOffset verifies -limit and -offset flag behaviour.
+// TestRun_LimitOffset verifies -limit and -offset flag behavior.
 func TestRun_LimitOffset(t *testing.T) {
 	type row struct{ Name string }
 

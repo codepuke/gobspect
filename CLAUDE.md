@@ -18,7 +18,7 @@ When asked to implement a PRD.md:
 - **Decode only.** No encoding support. Do not add encoding functionality.
 - **No runtime dependency on inspected types.** Opaque type decoders (time.Time, big.Int, UUID, etc.) are self-contained reimplementations. Never import `time`, `math/big`, `github.com/google/uuid`, or similar in the decoder layer (`decode.go`, `valuedecode.go`, `builtins.go`, `wire.go`). Presentation layers (`format.go`, `json.go`) and test code may import them when needed.
 - **Two-layer output:** a structural `Value` AST that preserves all wire information, and a `Format()` function for human-readable rendering. Never discard wire information in the AST to make formatting easier.
-- **Extensible opaque decoding.** Users register `DecoderFunc` functions keyed by type name (`OpaqueDecoder` is a backward-compatible alias). Built-in decoders are pre-registered and can be overridden.
+- **Extensible opaque decoding.** Users register `DecoderFunc` functions keyed by type name. Built-in decoders are pre-registered and can be overridden.
 
 ## Architecture
 
@@ -37,7 +37,7 @@ Read `docs/architecture.md` for the full design. In brief:
 
 - Standard Go conventions. Run `gofmt`, `go vet`, `staticcheck`.
 - Error messages start lowercase, no trailing punctuation, and include context: `"decoding struct field %q: %w"`.
-- No panics in library code. All errors returned. Use `fmt.Errorf` with `%w` for wrapping.
+- No panics in library code. All errors returned. Use `fmt.Errorf` with `%w` for wrapping. Exception: the `query` package's convenience functions (`Get`, `All`, `Keys`, `AllSeq`) panic on syntactically invalid path expressions, following the Go `regexp.MustCompile` convention. Use `Parse` + path-typed functions (`GetPath`, `AllPath`, etc.) when you need error-based handling.
 - Comments on exported types and functions follow godoc conventions.
 - Assume Go 1.26 or later: Avoid `interface{}` in new code; use `any`. Use generics when appropriate. When helpful, use new with the new feature that allows its operand to be an expression, e.g. `new(yearsSince(born))`.
 - Prefer the `slices` and `maps` standard library packages over hand-rolled helpers. Use `slices.Contains`, `slices.SortFunc`, `maps.Keys`, etc. instead of writing equivalent loops or utility functions.

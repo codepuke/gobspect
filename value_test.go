@@ -313,10 +313,10 @@ func TestDecode_TextMarshaler(t *testing.T) {
 func TestDecode_OpaqueWithRegisteredDecoder(t *testing.T) {
 	// When a GobEncoder is encoded directly (not via interface), gob sends an
 	// empty CommonType.Name in the wireType. The OpaqueValue.TypeName is therefore
-	// ""; register an anonymous decoder to handle these opaques.
+	// ""; register an unnamed decoder to handle these opaques.
 	buf := gobEncode(t, &gobEncoderType{S: "decoded"})
 	ins := gobspect.New()
-	ins.RegisterAnonymousDecoder(func(data []byte) (any, error) {
+	ins.RegisterUnnamedDecoder(func(data []byte) (any, error) {
 		return "got:" + string(data), nil
 	})
 	vals, err := ins.Stream(buf).Collect()

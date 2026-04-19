@@ -19,7 +19,7 @@ func AllPathSeq(root gobspect.Value, p Path) iter.Seq[gobspect.Value] {
 
 // AllSeq returns an iterator over all values matched by expr against root,
 // expanding * segments lazily. Panics if expr is syntactically invalid
-// (matching All's behaviour).
+// (matching All's behavior).
 func AllSeq(root gobspect.Value, expr string) iter.Seq[gobspect.Value] {
 	p, err := Parse(expr)
 	if err != nil {
@@ -29,13 +29,9 @@ func AllSeq(root gobspect.Value, expr string) iter.Seq[gobspect.Value] {
 }
 
 // AllPath returns all values matched by p against root, expanding wildcard
-// segments. Returns nil (not an empty slice) when nothing matches.
+// segments. Returns nil when nothing matches.
 func AllPath(root gobspect.Value, p Path) []gobspect.Value {
-	results := slices.Collect(AllPathSeq(root, p))
-	if len(results) == 0 {
-		return nil
-	}
-	return results
+	return slices.Collect(AllPathSeq(root, p))
 }
 
 // All returns all values matched by expr against root, expanding * segments.
@@ -248,7 +244,7 @@ func allWalk(cur gobspect.Value, segs []segment) []gobspect.Value {
 // segs.  This is used by wildcard descent (..[Filter…]) where each visited node
 // must be tested as a candidate, not treated as a collection to iterate over.
 //
-// Behaviour:
+// behavior:
 //   - Consume all leading segFilter segments.
 //   - If v passes every one of them, call allWalk(v, remaining) and return the
 //     results.

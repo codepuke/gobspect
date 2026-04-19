@@ -12,9 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// streamPoint and streamPointSlice are package-level so gob assigns stable names.
+// streamPoint is package-level so gob assigns a stable name.
 type streamPoint struct{ X, Y int }
-type streamPointSlice []streamPoint
 
 // streamOrder is a second struct type used to test heterogeneous streams.
 type streamOrder struct {
@@ -94,8 +93,7 @@ func TestStream_TypesLiveGrows(t *testing.T) {
 	}
 }
 
-// TestStream_ValuesSingleUse verifies that calling Values() twice returns an
-// empty iterator on the second call.
+// TestStream_ValuesSingleUse verifies that calling Values() twice panics.
 func TestStream_ValuesSingleUse(t *testing.T) {
 	buf := encodeStream(t, streamPoint{1, 2}, streamPoint{3, 4})
 
@@ -110,13 +108,11 @@ func TestStream_ValuesSingleUse(t *testing.T) {
 	}
 	assert.Equal(t, 2, count)
 
-	// Second call: must yield nothing.
-	var count2 int
-	for _, err := range stream.Values() {
-		require.NoError(t, err)
-		count2++
-	}
-	assert.Equal(t, 0, count2, "second call to Values() must yield nothing")
+	// Second call must panic.
+	assert.Panics(t, func() {
+		for range stream.Values() {
+		}
+	}, "Values() on a consumed Stream must panic")
 }
 
 // TestStream_CollectAfterPartialValues verifies that Collect() after a partial

@@ -72,8 +72,7 @@
 //   - math/big.Int and math/big.Rat (auto-detected)
 //   - UUID types from github.com/google/uuid and github.com/gofrs/uuid
 //
-// Additional decoders can be registered with [Inspector.RegisterDecoder],
-// which accepts a [DecoderFunc] (the [OpaqueDecoder] alias also works).
+// Additional decoders can be registered with [Inspector.RegisterDecoder].
 // TextMarshaler blobs are always decoded as UTF-8 strings automatically.
 //
 // # Formatting
@@ -86,11 +85,9 @@
 //
 // # Decoding limits
 //
-// Pass [WithOptions] to [New] to set a maximum byte limit ([Options.MaxBytes]):
+// Pass [WithReadLimit] to [New] to cap total bytes read from a stream:
 //
-//	ins := gobspect.New(gobspect.WithOptions(gobspect.Options{
-//	    MaxBytes: 10 << 20, // 10 MiB
-//	}))
+//	ins := gobspect.New(gobspect.WithReadLimit(10 << 20)) // 10 MiB
 //
 // # Path-based navigation
 //

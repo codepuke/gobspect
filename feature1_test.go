@@ -134,8 +134,8 @@ func TestAnonymousDecoders_TriedInOrder(t *testing.T) {
 	// Remove all existing anonymous decoders by creating a fresh inspector with none.
 	ins2 := gobspect.New()
 	// Override anonymous list: register error-first, then success.
-	ins2.RegisterAnonymousDecoder(errDecoder)
-	ins2.RegisterAnonymousDecoder(echoDecoder("second:"))
+	ins2.RegisterUnnamedDecoder(errDecoder)
+	ins2.RegisterUnnamedDecoder(echoDecoder("second:"))
 
 	vals, err := ins2.Stream(buf).Collect()
 	require.NoError(t, err)
@@ -151,8 +151,8 @@ func TestAnonymousDecoders_FirstSuccessWins(t *testing.T) {
 	// Register two succeeding anonymous decoders; only the first should be used.
 	buf := gobEncode(t, &simpleGobEncoder{payload: "data"})
 	ins := gobspect.New()
-	ins.RegisterAnonymousDecoder(echoDecoder("first:"))
-	ins.RegisterAnonymousDecoder(echoDecoder("second:"))
+	ins.RegisterUnnamedDecoder(echoDecoder("first:"))
+	ins.RegisterUnnamedDecoder(echoDecoder("second:"))
 
 	vals, err := ins.Stream(buf).Collect()
 	require.NoError(t, err)
@@ -168,7 +168,7 @@ func TestAnonymousDecoders_NamedLookupNotAffected(t *testing.T) {
 	buf := gobEncode(t, &gobEncoderType{S: "named"})
 	ins := gobspect.New()
 	// Register an anonymous decoder that would win for empty-named opaques.
-	ins.RegisterAnonymousDecoder(echoDecoder("anon:"))
+	ins.RegisterUnnamedDecoder(echoDecoder("anon:"))
 	// The gobEncoderType has TypeName="" so anonymous decoders apply.
 	// We want to verify that registering an anon decoder doesn't break named ones.
 	// Also register a named decoder under a made-up key to confirm named still works.
@@ -182,7 +182,7 @@ func TestAnonymousDecoders_NamedLookupNotAffected(t *testing.T) {
 	assert.Equal(t, "anon:named", ov.Decoded)
 }
 
-func TestRegisterAnonymousDecoder_EmptyKeyRemovedFromDecoders(t *testing.T) {
+func TestRegisterUnnamedDecoder_EmptyKeyRemovedFromDecoders(t *testing.T) {
 	// Verify that after New(), the empty string key is not in the named decoders map.
 	// We test this indirectly: RegisterDecoder("", fn) should still work as an
 	// override for the named path, but the builtin decodeBigAuto is now anonymous.

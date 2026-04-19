@@ -23,7 +23,7 @@ func (cr *countingReader) ReadByte() (byte, error) {
 			// Return the byte alongside the error, consistent with Read which
 			// returns n > 0 alongside the limit error.  All callers in the
 			// decode path (decodeUint and friends) check err before using b,
-			// so neither behaviour causes correctness problems — but returning
+			// so neither behavior causes correctness problems — but returning
 			// b makes the contract uniform.
 			return b, fmt.Errorf("gob: stream exceeds MaxBytes limit of %d", cr.limit)
 		}
@@ -61,22 +61,12 @@ func wrapWithLimit(r io.Reader, limit int64) byteReadReader {
 // suitable for display. It does not need to reconstruct the original Go type.
 type DecoderFunc func([]byte) (any, error)
 
-// OpaqueDecoder is kept for backward compatibility.
-// New code should use [DecoderFunc].
-type OpaqueDecoder = DecoderFunc
-
-// Options configures decoding limits.
-type Options struct {
-	// MaxBytes limits total bytes read from the stream. Zero means no limit.
-	MaxBytes int64
-}
-
 // Option is a functional option for [New].
 type Option func(*Inspector)
 
-// WithOptions sets decoding limits.
-func WithOptions(o Options) Option {
-	return func(ins *Inspector) { ins.options = o }
+// WithReadLimit sets the maximum total bytes read from a stream. Zero means no limit.
+func WithReadLimit(n int64) Option {
+	return func(ins *Inspector) { ins.maxBytes = n }
 }
 
 // WithTimeFormat sets the layout used to render time.Time opaque values.
@@ -91,9 +81,9 @@ func WithTimeFormat(layout string) Option {
 // Inspector is the top-level entry point. It holds the opaque decoder registry
 // and decoding options. Create one with [New].
 type Inspector struct {
-	decoders         map[string]DecoderFunc
+	decoders          map[string]DecoderFunc
 	anonymousDecoders []DecoderFunc
-	options          Options
+	maxBytes          int64
 }
 
 // New returns an Inspector with all built-in opaque decoders pre-registered.
@@ -113,10 +103,10 @@ func (ins *Inspector) RegisterDecoder(typeName string, dec DecoderFunc) {
 	ins.decoders[typeName] = dec
 }
 
-// RegisterAnonymousDecoder appends dec to the list of anonymous decoders tried
-// for opaque values with an empty type name. Decoders are tried in registration
+// RegisterUnnamedDecoder appends dec to the list of decoders tried for opaque
+// values whose gob wire type name is empty. Decoders are tried in registration
 // order; the first one that returns a non-error result wins.
-func (ins *Inspector) RegisterAnonymousDecoder(dec DecoderFunc) {
+func (ins *Inspector) RegisterUnnamedDecoder(dec DecoderFunc) {
 	ins.anonymousDecoders = append(ins.anonymousDecoders, dec)
 }
 

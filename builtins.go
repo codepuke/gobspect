@@ -54,7 +54,7 @@ func parseTimeBytes(data []byte) (unixSec int64, nsec int32, offsetSec int, err 
 		// stdlib UnmarshalBinary reads byte 15 as an unsigned byte (int(buf[2])),
 		// not as int8. For negative sub-minute LMT offsets the encoder stores a
 		// negative int8 value (e.g. -2 → 0xFE), but stdlib decodes it as the
-		// positive value 254. We match that behaviour so that the reconstructed
+		// positive value 254. We match that behavior so that the reconstructed
 		// zone offset is identical to what stdlib would return for the same blob.
 		offSec += int(data[15])
 	}

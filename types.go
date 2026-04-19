@@ -88,10 +88,11 @@ type InterfaceValue struct {
 // OpaqueValue holds the raw bytes for a GobEncoder, BinaryMarshaler, or
 // TextMarshaler value, along with any best-effort decoded form.
 type OpaqueValue struct {
-	TypeName string // from CommonType.Name
-	Encoding string // "gob", "binary", or "text"
-	Raw      []byte // the undecoded blob
-	Decoded  any    // best-effort decoded form, nil if no decoder matched
+	TypeName  string // from CommonType.Name
+	GobTypeID int    // stream-scoped type ID; use with Stream.TypeByID
+	Encoding  string // "gob", "binary", or "text"
+	Raw       []byte // the undecoded blob
+	Decoded   any    // best-effort decoded form, nil if no decoder matched
 }
 
 func (StructValue) gobValue()    {}
@@ -123,8 +124,8 @@ func (BoolValue) TypeID() int      { return 0 }
 func (StringValue) TypeID() int    { return 0 }
 func (BytesValue) TypeID() int     { return 0 }
 func (NilValue) TypeID() int       { return 0 }
-func (InterfaceValue) TypeID() int { return 0 }
-func (OpaqueValue) TypeID() int    { return 0 }
+func (InterfaceValue) TypeID() int  { return 0 }
+func (v OpaqueValue) TypeID() int   { return v.GobTypeID }
 
 // ValueKind returns a short lowercase string identifying the concrete type of v:
 // "struct", "map", "slice", "array", "int", "uint", "float", "complex",

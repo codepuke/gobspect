@@ -12,9 +12,9 @@ func registerBuiltins(ins *Inspector) {
 	// when encoded directly, because they use pointer receivers and gob sets
 	// CommonType.Name = reflect.Type.Name() on the pointer type, which is "".
 	// A format-based heuristic distinguishes them at decode time.
-	// Registered as an anonymous decoder so user-registered anonymous decoders
-	// tried before it can override the behaviour for a specific application.
-	ins.RegisterAnonymousDecoder(decodeBigAuto)
+	// Registered as an unnamed decoder so user-registered unnamed decoders
+	// tried before it can override the behavior for a specific application.
+	ins.RegisterUnnamedDecoder(decodeBigAuto)
 
 	// uuid.UUID (github.com/google/uuid and github.com/gofrs/uuid).
 	// TypeName will be "uuid.UUID" when the type is encoded via an interface

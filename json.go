@@ -73,6 +73,7 @@ func valueToJSONMap(v Value) (map[string]any, error) {
 		return map[string]any{
 			"kind":     "opaque",
 			"typeName": v.TypeName,
+			"typeId":   v.GobTypeID,
 			"encoding": v.Encoding,
 			"raw":      base64.StdEncoding.EncodeToString(v.Raw),
 			"decoded":  normalizeOpaqueDecoded(v.Decoded),

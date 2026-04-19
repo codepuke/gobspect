@@ -126,10 +126,11 @@ func TestToJSON_Kinds(t *testing.T) {
 		},
 		{
 			name:     "opaque_with_decoded",
-			value:    gobspect.OpaqueValue{TypeName: "Tok", Encoding: "binary", Raw: []byte{0x01}, Decoded: "val"},
+			value:    gobspect.OpaqueValue{TypeName: "Tok", GobTypeID: 7, Encoding: "binary", Raw: []byte{0x01}, Decoded: "val"},
 			wantKind: "opaque",
 			checkMore: func(t *testing.T, m map[string]any) {
 				assert.Equal(t, "Tok", m["typeName"])
+				assert.Equal(t, float64(7), m["typeId"])
 				assert.Equal(t, "binary", m["encoding"])
 				assert.Equal(t, "AQ==", m["raw"]) // base64(0x01)
 				assert.Equal(t, "val", m["decoded"])
@@ -141,6 +142,7 @@ func TestToJSON_Kinds(t *testing.T) {
 			wantKind: "opaque",
 			checkMore: func(t *testing.T, m map[string]any) {
 				assert.Nil(t, m["decoded"])
+				assert.Equal(t, float64(0), m["typeId"])
 			},
 		},
 		{

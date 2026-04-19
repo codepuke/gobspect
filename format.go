@@ -13,7 +13,7 @@ import (
 	"unicode/utf8"
 )
 
-// FormatOption configures the behaviour of [Format].
+// FormatOption configures the behavior of [Format].
 type FormatOption func(*formatConfig)
 
 // MapOrder controls the ordering of map entries in [Format] output.
@@ -49,7 +49,7 @@ const (
 // the original rendered length or whether it is single- or multi-line.
 //
 // Note: Char is repeated by Unicode code point, not by terminal display width.
-// Multi-byte fill characters (e.g. '█') produce the requested number of code
+// Multibyte fill characters (e.g. '█') produce the requested number of code
 // points; terminal column width may differ.
 type RedactConfig struct {
 	Keys       []string // exact field/key names that trigger redaction
@@ -362,7 +362,7 @@ func fmtPlainValue(v Value, cfg *formatConfig, depth int) string {
 }
 
 // fmtBytes renders a []byte value. When no explicit BytesFormat is set,
-// printable UTF-8 slices are rendered as a Go-quoted string. Otherwise the
+// printable UTF-8 slices are rendered as a Go-quoted string. Otherwise, the
 // requested format is used.
 func fmtBytes(b []byte, cfg *formatConfig) string {
 	if !cfg.bytesFormatExplicit && isPrintableUTF8(b) {
@@ -455,7 +455,7 @@ func fmtHex(b []byte, maxBytes int) string {
 
 // fmtOpaque renders an OpaqueValue. When Decoded is non-nil and rawOpaques is
 // false the decoded representation is returned directly: strings as-is,
-// anything else via fmt.Sprint. Otherwise the raw bytes are rendered using
+// anything else via fmt.Sprint. Otherwise, the raw bytes are rendered using
 // the configured byte format, prefixed with "(TypeName) " when TypeName is non-empty.
 func fmtOpaque(v OpaqueValue, cfg *formatConfig) string {
 	if v.Decoded != nil && !cfg.rawOpaques {
@@ -521,7 +521,6 @@ func fmtStructTo(w io.Writer, v StructValue, cfg *formatConfig, depth int) error
 	}
 	return writeStr(w, prefix+cfg.color.CloseBrace.apply("}"))
 }
-
 
 // fmtMapTo renders a MapValue to w. Entries are sorted by their formatted key
 // for deterministic output. Short maps render inline; long maps render indented.

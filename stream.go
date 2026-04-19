@@ -27,7 +27,7 @@ type Stream struct {
 // like Collect or Schema drains the stream. Calling Types before advancing
 // returns an empty slice.
 func (ins *Inspector) Stream(r io.Reader) *Stream {
-	sd := newStreamDecoder(wrapWithLimit(r, ins.options.MaxBytes))
+	sd := newStreamDecoder(wrapWithLimit(r, ins.maxBytes))
 	vd := newValueDecoder(ins, sd)
 	return &Stream{sd: sd, vd: vd}
 }
@@ -74,11 +74,10 @@ func (s *Stream) drainSeq() iter.Seq2[Value, error] {
 // definitions seen so far. Callers may call Types() from inside the loop
 // body to look up the type definition for the value just received.
 //
-// A Stream is single-use. If Values has already been called on this Stream,
-// subsequent calls return an iterator that yields nothing immediately.
+// A Stream is single-use. Calling Values on an already-consumed Stream panics.
 func (s *Stream) Values() iter.Seq2[Value, error] {
 	if s.consumed {
-		return func(yield func(Value, error) bool) {}
+		panic("gobspect: Values called on an already-consumed Stream")
 	}
 	s.consumed = true
 	return s.drainSeq()
@@ -131,7 +130,7 @@ func (s *Stream) Collect() ([]Value, error) {
 // alongside any error.
 //
 // This implementation decodes value bodies fully and throws them away. It is
-// not optimised for the types-only case.
+// not optimized for the types-only case.
 func (s *Stream) Schema() (*Schema, error) {
 	_, err := s.Collect()
 	return FormatSchema(s.sd.types), err
