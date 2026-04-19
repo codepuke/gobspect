@@ -40,6 +40,7 @@ Read `docs/architecture.md` for the full design. In brief:
 - No panics in library code. All errors returned. Use `fmt.Errorf` with `%w` for wrapping.
 - Comments on exported types and functions follow godoc conventions.
 - Assume Go 1.26 or later: Avoid `interface{}` in new code; use `any`. Use generics when appropriate. When helpful, use new with the new feature that allows its operand to be an expression, e.g. `new(yearsSince(born))`.
+- Prefer the `slices` and `maps` standard library packages over hand-rolled helpers. Use `slices.Contains`, `slices.SortFunc`, `maps.Keys`, etc. instead of writing equivalent loops or utility functions.
 
 ## Testing Conventions
 

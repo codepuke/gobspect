@@ -168,7 +168,7 @@ func gobStream(t *testing.T, v any, n int) io.Reader {
 	t.Helper()
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
-	for i := 0; i < n; i++ {
+	for range n {
 		if err := enc.Encode(v); err != nil {
 			t.Fatalf("gob encode: %v", err)
 		}
@@ -334,7 +334,7 @@ func TestRun_LimitOffset(t *testing.T) {
 	tests := []struct {
 		name       string
 		args       []string
-		n          int    // number of values to encode
+		n          int // number of values to encode
 		wantExit   int
 		wantLines  int    // expected number of non-empty output lines (-1 = don't check)
 		wantStderr string // substring expected in stderr (empty = none)

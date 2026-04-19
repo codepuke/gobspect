@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/csv"
 	"encoding/gob"
+	"slices"
 	"strings"
 	"testing"
 
@@ -489,13 +490,7 @@ func TestTabularPrinter_Union(t *testing.T) {
 
 	// Find the last header row (the grown one) by looking for the widest row.
 	// We know the grown header should have X,Y,Z,ID,Total.
-	found := false
-	for _, line := range lines {
-		if line == "X,Y,Z,ID,Total" {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(lines, "X,Y,Z,ID,Total")
 	assert.True(t, found, "grown header X,Y,Z,ID,Total must appear in output; got:\n%s", buf.String())
 
 	// The order row must appear and have values in the ID and Total columns.

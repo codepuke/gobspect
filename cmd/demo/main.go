@@ -41,10 +41,10 @@ func main() {
 
 	r := rand.New(rand.NewSource(42))
 
-	for i := 0; i < 1500; i++ {
+	for i := range 1500 {
 		numItems := r.Intn(5) + 1
 		items := make([]LineItem, numItems)
-		for j := 0; j < numItems; j++ {
+		for j := range numItems {
 			items[j] = LineItem{
 				SKU:      skus[r.Intn(len(skus))],
 				Quantity: r.Intn(10) + 1,
@@ -65,6 +65,6 @@ func main() {
 			log.Fatal(err)
 		}
 	}
-	
+
 	log.Printf("Successfully wrote 1500 orders to %s", os.Args[1])
 }

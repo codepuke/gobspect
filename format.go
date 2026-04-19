@@ -100,13 +100,13 @@ type ColorScheme struct {
 var ANSIColorScheme = ColorScheme{
 	FieldName:    Style{Prefix: "\x1b[32m", Suffix: "\x1b[0m"},   // green
 	TypeHeader:   Style{Prefix: "\x1b[1;36m", Suffix: "\x1b[0m"}, // bold cyan
-	CloseBrace:   Style{},                                          // no color (plain "{" and "}")
+	CloseBrace:   Style{},                                        // no color (plain "{" and "}")
 	String:       Style{Prefix: "\x1b[33m", Suffix: "\x1b[0m"},   // yellow
 	Number:       Style{Prefix: "\x1b[35m", Suffix: "\x1b[0m"},   // magenta
 	Bool:         Style{Prefix: "\x1b[36m", Suffix: "\x1b[0m"},   // cyan
 	Nil:          Style{Prefix: "\x1b[36m", Suffix: "\x1b[0m"},   // cyan
 	OpaquePrefix: Style{Prefix: "\x1b[2m", Suffix: "\x1b[0m"},    // dim
-	OpaqueValue:  Style{},                                          // delegated to inner value rendering
+	OpaqueValue:  Style{},                                        // delegated to inner value rendering
 	Bytes:        Style{Prefix: "\x1b[2m", Suffix: "\x1b[0m"},    // dim
 }
 
@@ -279,7 +279,7 @@ func fmtValueTo(w io.Writer, v Value, cfg *formatConfig, depth int) error {
 		case OpaqueValue:
 			typeName = v.TypeName
 		}
-		if typeName != "" && containsString(cfg.redactTypes.Types, typeName) {
+		if typeName != "" && slices.Contains(cfg.redactTypes.Types, typeName) {
 			return writeStr(w, redactForType(cfg))
 		}
 	}
@@ -509,7 +509,7 @@ func fmtStructTo(w io.Writer, v StructValue, cfg *formatConfig, depth int) error
 			return err
 		}
 		rendered := fmtValue(f.Value, cfg, depth+1)
-		if cfg.redactKeys != nil && containsString(cfg.redactKeys.Keys, f.Name) {
+		if cfg.redactKeys != nil && slices.Contains(cfg.redactKeys.Keys, f.Name) {
 			rendered = redactWithKeyCfg(rendered, *cfg.redactKeys)
 		}
 		if err := writeStr(w, rendered); err != nil {
@@ -522,15 +522,6 @@ func fmtStructTo(w io.Writer, v StructValue, cfg *formatConfig, depth int) error
 	return writeStr(w, prefix+cfg.color.CloseBrace.apply("}"))
 }
 
-// containsString reports whether s is an element of the slice.
-func containsString(slice []string, s string) bool {
-	for _, v := range slice {
-		if v == s {
-			return true
-		}
-	}
-	return false
-}
 
 // fmtMapTo renders a MapValue to w. Entries are sorted by their formatted key
 // for deterministic output. Short maps render inline; long maps render indented.
@@ -572,7 +563,7 @@ func fmtMapTo(w io.Writer, v MapValue, cfg *formatConfig, depth int) error {
 	for _, ke := range keyed {
 		plainK := ke.canonKey
 		plainVV := fmtValue(ke.entry.Value, pcfg, 0)
-		if cfg.redactKeys != nil && containsString(cfg.redactKeys.Keys, plainK) {
+		if cfg.redactKeys != nil && slices.Contains(cfg.redactKeys.Keys, plainK) {
 			plainVV = redactWithKeyCfg(plainVV, *cfg.redactKeys)
 		}
 		if strings.ContainsRune(plainK, '\n') || strings.ContainsRune(plainVV, '\n') {
@@ -584,7 +575,7 @@ func fmtMapTo(w io.Writer, v MapValue, cfg *formatConfig, depth int) error {
 			// Build the colored version only when a color scheme is active.
 			colorK := fmtValue(ke.entry.Key, cfg, 0)
 			colorVV := fmtValue(ke.entry.Value, cfg, 0)
-			if cfg.redactKeys != nil && containsString(cfg.redactKeys.Keys, plainK) {
+			if cfg.redactKeys != nil && slices.Contains(cfg.redactKeys.Keys, plainK) {
 				colorVV = redactWithKeyCfg(plainVV, *cfg.redactKeys)
 			}
 			colorParts = append(colorParts, colorK+": "+colorVV)
@@ -628,7 +619,7 @@ func fmtMapTo(w io.Writer, v MapValue, cfg *formatConfig, depth int) error {
 			return err
 		}
 		rendered := fmtValue(ke.entry.Value, cfg, depth+1)
-		if cfg.redactKeys != nil && containsString(cfg.redactKeys.Keys, ke.canonKey) {
+		if cfg.redactKeys != nil && slices.Contains(cfg.redactKeys.Keys, ke.canonKey) {
 			rendered = redactWithKeyCfg(rendered, *cfg.redactKeys)
 		}
 		if err := writeStr(w, rendered); err != nil {
