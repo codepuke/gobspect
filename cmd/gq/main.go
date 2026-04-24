@@ -19,13 +19,14 @@
 //
 //	gq -f data.gob
 //	gq -f data.gob .Header.Timestamp
-//	gq -f data.gob.gz           # .gz files are decompressed automatically
+//	gq -f data.gob.gz           # .gz files (and gzipped stdin) are decompressed automatically
 //	cat data.gob | gq .Items.*
 //	gq -schema -f data.gob
 //	gq -format json -f data.gob .Name
 package main
 
 import (
+	"bufio"
 	"compress/gzip"
 	"encoding/json"
 	"errors"
@@ -134,7 +135,18 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 
 	var r io.Reader
 	if inputPath == "" {
-		r = stdin
+		br := bufio.NewReader(stdin)
+		if head, _ := br.Peek(2); len(head) == 2 && head[0] == 0x1f && head[1] == 0x8b {
+			gz, err := gzip.NewReader(br)
+			if err != nil {
+				fmt.Fprintf(stderr, "gq: opening gzip stream: %v\n", err)
+				return 1
+			}
+			defer gz.Close()
+			r = gz
+		} else {
+			r = br
+		}
 	} else {
 		f, err := os.Open(inputPath)
 		if err != nil {
