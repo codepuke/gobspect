@@ -50,3 +50,6 @@ GEMINI.md
 .github/copilot-instructions.md
 .agents/rules/claude.md
 .opendev/skills/project_context/SKILL.md
+
+# Windows Zone.Identifier alternate data streams (created by WSL/NTFS)
+*:Zone.Identifier

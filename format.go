@@ -33,6 +33,22 @@ const (
 	BytesLiteral                    // Go-style: []byte{0xde, 0xad, ...}
 )
 
+// ParseBytesFormat converts a string to a [BytesFormat] constant.
+// Accepts "hex", "base64", or "literal" (case-insensitive). An empty string
+// maps to [BytesHex]. Returns (BytesHex, false) for any unrecognised value.
+func ParseBytesFormat(s string) (BytesFormat, bool) {
+	switch strings.ToLower(s) {
+	case "", "hex":
+		return BytesHex, true
+	case "base64":
+		return BytesBase64, true
+	case "literal":
+		return BytesLiteral, true
+	default:
+		return BytesHex, false
+	}
+}
+
 // RedactConfig controls value redaction by field or map key name.
 //
 // When TextLength is 0 (the default), the number of fill characters emitted

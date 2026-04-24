@@ -31,11 +31,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"syscall"
 
 	"github.com/codepuke/gobspect"
 	"github.com/codepuke/gobspect/query"
+	"github.com/codepuke/gobspect/sortval"
+	"github.com/codepuke/gobspect/tabular"
 	"golang.org/x/term"
 )
 
@@ -82,16 +83,12 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 
 	args = fs.Args()
 
-	// Resolve queryExpr and inputPath from positional arguments.
-	// Positional args are always query expressions; use -f/-file for the input file.
 	var queryExpr string
-	inputPath := *fileFlag // empty = stdin
+	inputPath := *fileFlag
 
 	switch len(args) {
 	case 0:
-		// No args: identity query, use -file or stdin.
 	case 1:
-		// One arg: it is the query expression.
 		queryExpr = args[0]
 	default:
 		fmt.Fprintln(stderr, "gq: too many arguments")
@@ -99,16 +96,10 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		return 2
 	}
 
-	// Normalise the query: "." is the identity; ".Foo" → "Foo" (leading dot stripped).
-	// Preserve ".." which is valid descent syntax.
-	if queryExpr == "." {
-		queryExpr = ""
-	} else if strings.HasPrefix(queryExpr, ".") && !strings.HasPrefix(queryExpr, "..") {
-		queryExpr = queryExpr[1:]
-	}
+	queryExpr = query.NormalizeQuery(queryExpr)
 
 	// Parse -hetero before flag validation so we can reject bad values early.
-	heteroMode, heteroOK := parseHeteroMode(*heteroFlag)
+	heteroMode, heteroOK := tabular.ParseHeterogeneousMode(*heteroFlag)
 	if !heteroOK {
 		fmt.Fprintf(stderr, "gq: unknown -hetero value %q; use first, reject, union, or partition\n", *heteroFlag)
 		return 2
@@ -123,7 +114,6 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		return 2
 	}
 
-	// Validate flags and combinations.
 	warnings, err := validateFlags(*schemaFlag, *typesFlag, queryExpr, *formatFlag, *indexFlag, *limitFlag, *offsetFlag, *compactFlag, *rawFlag, *colorFlag, *noColorFlag, *sortFlag, *sortDescFlag, *sortFoldFlag, *sortDropFlag, *nullOnMissFlag, *timeFormatFlag)
 	if err != nil {
 		fmt.Fprintf(stderr, "gq: %v\n", err)
@@ -133,14 +123,12 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		fmt.Fprintf(stderr, "gq: %s\n", w)
 	}
 
-	// Parse path before opening any file so bad expressions fail fast.
 	path, err := query.Parse(queryExpr)
 	if err != nil {
 		fmt.Fprintf(stderr, "gq: invalid query expression %q: %v\n", queryExpr, err)
 		return 2
 	}
 
-	// Open input.
 	var r io.Reader
 	if inputPath == "" {
 		r = stdin
@@ -154,30 +142,25 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		r = f
 	}
 
-	// Build inspector options.
 	var inspOpts []gobspect.Option
 	if *timeFormatFlag != "" {
 		inspOpts = append(inspOpts, gobspect.WithTimeFormat(*timeFormatFlag))
 	}
 	ins := gobspect.New(inspOpts...)
 
-	// Resolve format options.
-	bytesFormat, ok := parseBytesFormat(*bytesFlag)
+	bytesFormat, ok := gobspect.ParseBytesFormat(*bytesFlag)
 	if !ok {
 		fmt.Fprintf(stderr, "gq: unknown -bytes value %q; use hex, base64, or literal\n", *bytesFlag)
 		return 2
 	}
 
-	// Validate -format.
 	switch *formatFlag {
 	case "pretty", "json", "csv", "tsv":
-		// ok
 	default:
 		fmt.Fprintf(stderr, "gq: unknown -format value %q; use pretty, json, csv, or tsv\n", *formatFlag)
 		return 2
 	}
 
-	// Determine color: auto (TTY detection) unless forced.
 	useColor := false
 	if *colorFlag {
 		useColor = true
@@ -187,7 +170,6 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		}
 	}
 
-	// --schema mode.
 	if *schemaFlag {
 		schema, err := ins.Stream(r).Schema()
 		if err != nil {
@@ -204,7 +186,6 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		return 0
 	}
 
-	// --types mode.
 	if *typesFlag {
 		s := ins.Stream(r)
 		_, err := s.Collect()
@@ -222,29 +203,26 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		return 0
 	}
 
-	// Build Format options.
 	fmtOpts := []gobspect.FormatOption{
 		gobspect.WithBytesFormat(bytesFormat),
 		gobspect.WithMaxBytes(*maxBytesFlag),
 	}
 
-	// Value mode: build a Stream so the tabular printer can call TypeByID.
 	stream := ins.Stream(r)
 
-	// Set up tabular printer for csv/tsv.
-	var tp *tabularPrinter
+	var tp *tabular.Printer
 	if *formatFlag == "csv" || *formatFlag == "tsv" {
 		delim := rune(',')
 		if *formatFlag == "tsv" {
 			delim = '\t'
 		}
-		tp = newTabularPrinter(stdout,
-			withDelimiter(delim),
-			withNoHeaders(*noHeadersFlag),
-			withStream(stream),
-			withBytesFormat(bytesFormat),
-			withMaxBytes(*maxBytesFlag),
-			withHeterogeneousMode(heteroMode),
+		tp = tabular.NewPrinter(stdout,
+			tabular.WithDelimiter(delim),
+			tabular.WithNoHeaders(*noHeadersFlag),
+			tabular.WithStream(stream),
+			tabular.WithBytesFormat(bytesFormat),
+			tabular.WithMaxBytes(*maxBytesFlag),
+			tabular.WithHeterogeneousMode(heteroMode),
 		)
 		defer func() {
 			if flushErr := tp.Flush(); flushErr != nil {
@@ -256,25 +234,21 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		}()
 	}
 
-	// Build sortSpec from -sort flags; zero value means no sort.
-	var sortSpec SortSpec
+	var sortSpec sortval.SortSpec
 	if *sortFlag != "" {
-		sortSpec, err = ParseSortSpec(*sortFlag, *sortDescFlag, *sortFoldFlag, *sortDropFlag)
+		sortSpec, err = sortval.ParseSortSpec(*sortFlag, *sortDescFlag, *sortFoldFlag, *sortDropFlag)
 		if err != nil {
 			fmt.Fprintf(stderr, "gq: %v\n", err)
 			return 2
 		}
 	}
 
-	// Value mode: iterate the stream.
 	idx := 0
 	anyMatch := false
 	exitCode := 0
-	resultN := 0 // absolute index of each result across the whole stream
+	resultN := 0
 
 	if len(sortSpec.Keys) > 0 {
-		// Sort path: collect ALL query results across ALL stream values, then
-		// sort and apply offset/limit to the sorted slice.
 		var allResults []gobspect.Value
 		for v, err := range stream.Values() {
 			if err != nil {
@@ -282,7 +256,6 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 				return 1
 			}
 
-			// --index filtering.
 			if *indexFlag >= 0 && idx != *indexFlag {
 				idx++
 				continue
@@ -295,13 +268,12 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 
 			idx++
 
-			// If --index was specified and we just processed it, stop.
 			if *indexFlag >= 0 && idx > *indexFlag {
 				break
 			}
 		}
 
-		sorted := sortMatches(seqOf(allResults), sortSpec)
+		sorted := sortval.SortMatches(sortval.SeqOf(allResults), sortSpec)
 
 		for pos, result := range sorted {
 			if pos < *offsetFlag {
@@ -326,7 +298,6 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 			}
 		}
 	} else {
-		// Streaming path: existing behavior unchanged.
 	outer:
 		for v, err := range stream.Values() {
 			if err != nil {
@@ -334,15 +305,13 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 				return 1
 			}
 
-			// --index filtering.
 			if *indexFlag >= 0 && idx != *indexFlag {
 				idx++
 				continue
 			}
 
-			// Apply query path and stream results lazily.
 			for result := range query.AllPathSeq(v, path) {
-				anyMatch = true // set before offset check so offset-past-end doesn't trigger path-not-found
+				anyMatch = true
 
 				pos := resultN
 				resultN++
@@ -371,14 +340,12 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 
 			idx++
 
-			// If --index was specified and we just processed it, stop.
 			if *indexFlag >= 0 && idx > *indexFlag {
 				break
 			}
 		}
 	}
 
-	// Report path-not-found when query was non-empty and nothing matched.
 	if queryExpr != "" && !anyMatch {
 		if *nullOnMissFlag {
 			fmt.Fprintln(stdout, "null")
@@ -434,39 +401,7 @@ func printValue(v gobspect.Value, w io.Writer, format string, raw, compact, colo
 	}
 }
 
-// parseHeteroMode converts a flag string to a HeterogeneousMode constant.
-func parseHeteroMode(s string) (HeterogeneousMode, bool) {
-	switch strings.ToLower(s) {
-	case "first":
-		return HeterogeneousFirstWins, true
-	case "reject":
-		return HeterogeneousReject, true
-	case "union":
-		return HeterogeneousUnion, true
-	case "partition":
-		return HeterogeneousPartition, true
-	default:
-		return HeterogeneousFirstWins, false
-	}
-}
-
-// parseBytesFormat converts a flag string to a BytesFormat constant.
-func parseBytesFormat(s string) (gobspect.BytesFormat, bool) {
-	switch strings.ToLower(s) {
-	case "hex":
-		return gobspect.BytesHex, true
-	case "base64":
-		return gobspect.BytesBase64, true
-	case "literal":
-		return gobspect.BytesLiteral, true
-	default:
-		return gobspect.BytesHex, false
-	}
-}
-
 // isTerminal reports whether f is connected to a terminal.
-// Uses golang.org/x/term which calls GetConsoleMode on Windows and
-// isatty-style ioctl on Unix, handling ConPTY and WSL correctly.
 func isTerminal(f *os.File) bool {
 	return term.IsTerminal(int(f.Fd()))
 }

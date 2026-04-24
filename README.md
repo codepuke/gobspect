@@ -358,6 +358,43 @@ for v := range query.AllPathSeq(root, p) {
 
 See [query/README.md](query/README.md) for the full path syntax, filter expressions, and API reference.
 
+## Sorting
+
+The [`sortval`](sortval/README.md) subpackage (`github.com/codepuke/gobspect/sortval`) sorts sequences of `Value` nodes by struct field keys:
+
+```go
+spec, err := sortval.ParseSortSpec("Name,Score", false, false, false)
+if err != nil { ... }
+
+sorted := sortval.SortMatches(sortval.SeqOf(results), spec)
+```
+
+`ParseSortSpec` accepts a comma-separated list of field names plus flags for descending order (`desc`), case-insensitive comparison (`fold`), and exclusion of rows missing all sort keys (`dropMissing`). The comparison delegates to `gobspect.CompareValues` / `gobspect.CompareValuesFold`.
+
+See [sortval/README.md](sortval/README.md) for the full API reference.
+
+## Tabular output
+
+The [`tabular`](tabular/README.md) subpackage (`github.com/codepuke/gobspect/tabular`) writes `Value` nodes as CSV or TSV rows:
+
+```go
+tp := tabular.NewPrinter(&buf,
+    tabular.WithStream(stream),
+    tabular.WithDelimiter(','),
+    tabular.WithHeterogeneousMode(tabular.HeterogeneousUnion),
+)
+
+for v, err := range stream.Values() {
+    if err != nil { ... }
+    if err := tp.WriteValue(v); err != nil { ... }
+}
+tp.Flush()
+```
+
+The printer derives a header row from the first struct's field definitions, aligns sparse gob rows to the canonical column order, and supports four strategies for mixed-type streams: `FirstWins`, `Reject`, `Union`, and `Partition`.
+
+See [tabular/README.md](tabular/README.md) for all options and heterogeneous-mode details.
+
 ## Documentation
 
 - [docs/api.md](docs/api.md) - Full API reference including all Value node types and formatting options
