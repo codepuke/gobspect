@@ -46,7 +46,10 @@ func TestSchemaAt(t *testing.T) {
 		{"Missing", "", true},
 		{"Items.0.Missing", "", true},
 		{"ID.0", "", true},       // cannot index int
-		{"..Items", "", true},    // descent not supported statically
+		// descent collects every reachable Items field; Order.Tags is a
+		// map[string]string, so its value type "string" also enters the union
+		// because any string key could in principle be "Items" at runtime.
+		{"..Items", "[]LineItem|string", false},
 		{"SKU,Price", "struct", false}, // projection returns anonymous struct
 		{"Items.Price", "", true},      // cannot navigate field on slice
 	}
@@ -65,6 +68,149 @@ func TestSchemaAt(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSchemaAt_Descent verifies that recursive descent collects the union of
+// reachable types and joins multiple results with "|" in sorted order.
+func TestSchemaAt_Descent(t *testing.T) {
+	schema := &gobspect.Schema{
+		Types: []gobspect.TypeDecl{
+			{
+				Name: "Order",
+				Kind: gobspect.KindStruct,
+				Fields: []gobspect.FieldDecl{
+					{Name: "ID", Type: "int"},
+					{Name: "Customer", Type: "Person"},
+					{Name: "Items", Type: "[]LineItem"},
+				},
+			},
+			{
+				Name: "Person",
+				Kind: gobspect.KindStruct,
+				Fields: []gobspect.FieldDecl{
+					{Name: "Name", Type: "string"},
+					{Name: "Address", Type: "Address"},
+				},
+			},
+			{
+				Name: "Address",
+				Kind: gobspect.KindStruct,
+				Fields: []gobspect.FieldDecl{
+					{Name: "Street", Type: "string"},
+					{Name: "City", Type: "string"},
+				},
+			},
+			{
+				Name: "LineItem",
+				Kind: gobspect.KindStruct,
+				Fields: []gobspect.FieldDecl{
+					{Name: "SKU", Type: "string"},
+					{Name: "Price", Type: "float"},
+					{Name: "Supplier", Type: "Person"}, // shares Person with Order.Customer
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name string
+		expr string
+		want string
+	}{
+		{
+			name: "descent_to_single_field_string",
+			expr: "..Name",
+			want: "string",
+		},
+		{
+			name: "descent_to_field_with_multiple_reachable_struct_parents",
+			// Person.Address points to Address, reachable via both Customer and Supplier.
+			// Result: struct type "Address" (deduped).
+			expr: "..Address",
+			want: "Address",
+		},
+		{
+			name: "descent_to_items_slice",
+			expr: "..Items",
+			want: "[]LineItem",
+		},
+		{
+			name: "descent_then_index_produces_element",
+			expr: "..Items.0",
+			want: "LineItem",
+		},
+		{
+			name: "descent_collects_heterogeneous_field_types",
+			// "ID" exists only on Order; we descend from Order so it's still reachable.
+			expr: "..ID",
+			want: "int",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := query.Parse(tt.expr)
+			require.NoError(t, err)
+			got, err := query.SchemaAt(schema, "Order", p)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestSchemaAt_DescentUnion verifies the pipe-joined union form when two
+// distinct field types with the same name are reachable.
+func TestSchemaAt_DescentUnion(t *testing.T) {
+	schema := &gobspect.Schema{
+		Types: []gobspect.TypeDecl{
+			{
+				Name: "Root",
+				Kind: gobspect.KindStruct,
+				Fields: []gobspect.FieldDecl{
+					{Name: "A", Type: "Alpha"},
+					{Name: "B", Type: "Beta"},
+				},
+			},
+			{
+				Name: "Alpha",
+				Kind: gobspect.KindStruct,
+				Fields: []gobspect.FieldDecl{
+					{Name: "Value", Type: "string"},
+				},
+			},
+			{
+				Name: "Beta",
+				Kind: gobspect.KindStruct,
+				Fields: []gobspect.FieldDecl{
+					{Name: "Value", Type: "int"},
+				},
+			},
+		},
+	}
+	p, err := query.Parse("..Value")
+	require.NoError(t, err)
+	got, err := query.SchemaAt(schema, "Root", p)
+	require.NoError(t, err)
+	assert.Equal(t, "int|string", got, "union should be sorted and pipe-joined")
+}
+
+// TestSchemaAt_DescentUnreachable verifies an error when no reachable type has
+// the requested field.
+func TestSchemaAt_DescentUnreachable(t *testing.T) {
+	schema := &gobspect.Schema{
+		Types: []gobspect.TypeDecl{
+			{
+				Name: "Root",
+				Kind: gobspect.KindStruct,
+				Fields: []gobspect.FieldDecl{
+					{Name: "A", Type: "int"},
+				},
+			},
+		},
+	}
+	p, err := query.Parse("..Missing")
+	require.NoError(t, err)
+	_, err = query.SchemaAt(schema, "Root", p)
+	require.Error(t, err)
 }
 
 // TestSchemaAt_CompositeMapKeys verifies that SchemaAt and extractElemType

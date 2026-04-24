@@ -7,19 +7,20 @@ import (
 	"io"
 )
 
-// countingReader wraps a byteReadReader and enforces a byte limit.
-// When the total bytes read exceeds limit, both ReadByte and Read return an error.
+// countingReader wraps a byteReadReader and tracks the total number of bytes
+// read. When limit > 0, ReadByte and Read also return an error once the total
+// crosses limit.
 type countingReader struct {
 	r     byteReadReader
 	n     int64
-	limit int64
+	limit int64 // zero = no limit
 }
 
 func (cr *countingReader) ReadByte() (byte, error) {
 	b, err := cr.r.ReadByte()
 	if err == nil {
 		cr.n++
-		if cr.n > cr.limit {
+		if cr.limit > 0 && cr.n > cr.limit {
 			// Return the byte alongside the error, consistent with Read which
 			// returns n > 0 alongside the limit error.  All callers in the
 			// decode path (decodeUint and friends) check err before using b,
@@ -34,24 +35,26 @@ func (cr *countingReader) ReadByte() (byte, error) {
 func (cr *countingReader) Read(p []byte) (int, error) {
 	n, err := cr.r.Read(p)
 	cr.n += int64(n)
-	if err == nil && cr.n > cr.limit {
+	if err == nil && cr.limit > 0 && cr.n > cr.limit {
 		return n, fmt.Errorf("gob: stream exceeds MaxBytes limit of %d", cr.limit)
 	}
 	return n, err
 }
 
-// wrapWithLimit wraps r in a countingReader when limit > 0.
-func wrapWithLimit(r io.Reader, limit int64) byteReadReader {
+// bytesRead returns the total byte count consumed so far.
+func (cr *countingReader) bytesRead() int64 { return cr.n }
+
+// wrapWithLimit wraps r in a countingReader so that its byte counter is
+// available to the stream decoder. If limit > 0, the counter also enforces
+// the maximum.
+func wrapWithLimit(r io.Reader, limit int64) *countingReader {
 	var br byteReadReader
 	if b, ok := r.(byteReadReader); ok {
 		br = b
 	} else {
 		br = bufio.NewReader(r)
 	}
-	if limit > 0 {
-		return &countingReader{r: br, limit: limit}
-	}
-	return br
+	return &countingReader{r: br, limit: limit}
 }
 
 // DecoderFunc decodes the raw bytes of a GobEncoder, BinaryMarshaler, or
@@ -78,12 +81,25 @@ func WithTimeFormat(layout string) Option {
 	}
 }
 
+// WithSkipCorruptValues configures the inspector to continue past individual
+// value-message decode failures instead of aborting the stream. Each skipped
+// message is counted and available via [Stream.SkipCount]. Errors in type-
+// definition messages remain fatal because they would leave the type registry
+// inconsistent and subsequent values undecodable.
+//
+// Enable this when inspecting archived logs that may contain occasional bad
+// records; leave it off for strict validation.
+func WithSkipCorruptValues(b bool) Option {
+	return func(ins *Inspector) { ins.skipCorruptValues = b }
+}
+
 // Inspector is the top-level entry point. It holds the opaque decoder registry
 // and decoding options. Create one with [New].
 type Inspector struct {
 	decoders          map[string]DecoderFunc
 	anonymousDecoders []DecoderFunc
 	maxBytes          int64
+	skipCorruptValues bool
 }
 
 // New returns an Inspector with all built-in opaque decoders pre-registered.
@@ -120,13 +136,16 @@ type byteReadReader interface {
 
 // streamDecoder holds per-stream state: the type registry and the source reader.
 type streamDecoder struct {
-	r        byteReadReader
+	r        *countingReader
 	registry map[int]wireTypeDef // type ID → wireTypeDef
 	types    []TypeInfo          // accumulated in definition order
 	byID     map[int]int         // type ID → index in types
+	msgIdx   int                 // 0-based counter of messages fully read
+	msgStart int64               // byte offset of the current (or next) message start
+	msgLen   int                 // body length of the current message
 }
 
-func newStreamDecoder(r byteReadReader) *streamDecoder {
+func newStreamDecoder(r *countingReader) *streamDecoder {
 	return &streamDecoder{
 		r:        r,
 		registry: make(map[int]wireTypeDef),
@@ -135,8 +154,10 @@ func newStreamDecoder(r byteReadReader) *streamDecoder {
 }
 
 // readMessage reads the next length-prefixed message from the stream.
-// Returns (nil, io.EOF) when the stream is exhausted cleanly.
+// Records msgStart (byte offset of the length prefix) and msgLen (body length)
+// before returning. Returns (nil, io.EOF) when the stream is exhausted cleanly.
 func (sd *streamDecoder) readMessage() ([]byte, error) {
+	sd.msgStart = sd.r.bytesRead()
 	n, err := decodeUint(sd.r)
 	if err != nil {
 		return nil, err // may be io.EOF — caller distinguishes
@@ -148,23 +169,50 @@ func (sd *streamDecoder) readMessage() ([]byte, error) {
 	if _, err := io.ReadFull(sd.r, buf); err != nil {
 		return nil, fmt.Errorf("gob: reading message body: %w", err)
 	}
+	sd.msgLen = int(n)
 	return buf, nil
 }
 
 // nextRawMessage reads the next stream message and returns the raw signed
-// type ID and a reader positioned at the message body (after the type ID).
+// type ID, a reader positioned at the message body (after the type ID), and
+// a MessageInfo describing the framing.
 // rawID < 0 means type definition; rawID > 0 means value.
-func (sd *streamDecoder) nextRawMessage() (rawID int64, r *bytes.Reader, err error) {
+// msgIdx and msgStart reflect the message that was just read; callers should
+// invoke advanceMessage() once they are done processing it, so that subsequent
+// wrapErr calls (e.g. for value-body decode errors) still cite this message.
+func (sd *streamDecoder) nextRawMessage() (rawID int64, r *bytes.Reader, info MessageInfo, err error) {
 	buf, err := sd.readMessage()
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, MessageInfo{}, err
+	}
+	info = MessageInfo{
+		Index:   sd.msgIdx,
+		Offset:  sd.msgStart,
+		BodyLen: sd.msgLen,
+		Body:    buf,
 	}
 	br := bytes.NewReader(buf)
 	rawID, err = decodeInt(br)
 	if err != nil {
-		return 0, nil, fmt.Errorf("gob: reading type ID: %w", err)
+		return 0, nil, info, sd.wrapErr(fmt.Errorf("gob: reading type ID: %w", err))
 	}
-	return rawID, br, nil
+	info.TypeID = int(rawID)
+	return rawID, br, info, nil
+}
+
+// advanceMessage increments the per-stream message counter. Callers invoke
+// this once they finish processing the message most recently returned by
+// nextRawMessage, so that the *next* call to nextRawMessage starts tracking
+// the following message.
+func (sd *streamDecoder) advanceMessage() { sd.msgIdx++ }
+
+// wrapErr annotates err with the current message index and byte offset for
+// better diagnostics. Returns err unchanged when err is nil or io.EOF.
+func (sd *streamDecoder) wrapErr(err error) error {
+	if err == nil || err == io.EOF {
+		return err
+	}
+	return fmt.Errorf("gob: message %d at offset %d: %w", sd.msgIdx, sd.msgStart, err)
 }
 
 // processTypeDef decodes a wireType definition from the message body and

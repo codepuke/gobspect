@@ -224,3 +224,18 @@ type TypeRef struct {
 	ID   int
 	Name string // resolved name if available in the registry
 }
+
+// MessageInfo describes a single length-prefixed message as it appears on the
+// wire, without requiring the message body to be decoded into a Value. It is
+// yielded by [Stream.Messages] and can be used for size profiling, stream
+// indexing, or recovering framing information during error diagnostics.
+type MessageInfo struct {
+	Index   int    // 0-based counter of messages in the stream
+	Offset  int64  // byte offset of the length prefix from the start of the stream
+	BodyLen int    // length of the message body (the bytes after the length prefix)
+	TypeID  int    // signed type ID from the start of the body: negative = type def, positive = value
+	Body    []byte // raw body bytes (including the type-ID prefix at the start)
+}
+
+// IsTypeDef reports whether the message carries a type definition.
+func (m MessageInfo) IsTypeDef() bool { return m.TypeID < 0 }

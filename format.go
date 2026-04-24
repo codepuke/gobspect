@@ -86,9 +86,11 @@ type Style struct {
 	Prefix, Suffix string
 }
 
-// apply wraps s with the Style's Prefix and Suffix. A zero-valued Style
-// returns s unchanged.
-func (st Style) apply(s string) string {
+// Apply wraps s with the Style's Prefix and Suffix. A zero-valued Style
+// returns s unchanged — it's the identity function, not an empty wrap — so
+// consumers can thread a ColorScheme through a rendering pipeline without
+// branching on whether color is on.
+func (st Style) Apply(s string) string {
 	if st.Prefix == "" && st.Suffix == "" {
 		return s
 	}
@@ -303,13 +305,13 @@ func fmtValueTo(w io.Writer, v Value, cfg *formatConfig, depth int) error {
 	switch v := v.(type) {
 	case BoolValue:
 		if v.V {
-			return writeStr(w, cfg.color.Bool.apply("true"))
+			return writeStr(w, cfg.color.Bool.Apply("true"))
 		}
-		return writeStr(w, cfg.color.Bool.apply("false"))
+		return writeStr(w, cfg.color.Bool.Apply("false"))
 	case IntValue:
-		return writeStr(w, cfg.color.Number.apply(fmt.Sprintf("%d", v.V)))
+		return writeStr(w, cfg.color.Number.Apply(fmt.Sprintf("%d", v.V)))
 	case UintValue:
-		return writeStr(w, cfg.color.Number.apply(fmt.Sprintf("%d", v.V)))
+		return writeStr(w, cfg.color.Number.Apply(fmt.Sprintf("%d", v.V)))
 	case FloatValue:
 		s := strconv.FormatFloat(v.V, 'g', -1, 64)
 		// Ensure integer-valued floats are distinguishable from IntValue:
@@ -318,7 +320,7 @@ func fmtValueTo(w io.Writer, v Value, cfg *formatConfig, depth int) error {
 		if !strings.ContainsAny(s, ".eE") {
 			s += ".0"
 		}
-		return writeStr(w, cfg.color.Number.apply(s))
+		return writeStr(w, cfg.color.Number.Apply(s))
 	case ComplexValue:
 		var s string
 		if math.Signbit(v.Imag) {
@@ -326,13 +328,13 @@ func fmtValueTo(w io.Writer, v Value, cfg *formatConfig, depth int) error {
 		} else {
 			s = fmt.Sprintf("(%g+%gi)", v.Real, v.Imag)
 		}
-		return writeStr(w, cfg.color.Number.apply(s))
+		return writeStr(w, cfg.color.Number.Apply(s))
 	case StringValue:
-		return writeStr(w, cfg.color.String.apply(fmt.Sprintf("%q", v.V)))
+		return writeStr(w, cfg.color.String.Apply(fmt.Sprintf("%q", v.V)))
 	case BytesValue:
-		return writeStr(w, cfg.color.Bytes.apply(fmtBytes(v.V, cfg)))
+		return writeStr(w, cfg.color.Bytes.Apply(fmtBytes(v.V, cfg)))
 	case NilValue:
-		return writeStr(w, cfg.color.Nil.apply("nil"))
+		return writeStr(w, cfg.color.Nil.Apply("nil"))
 	case InterfaceValue:
 		return fmtInterfaceTo(w, v, cfg, depth)
 	case OpaqueValue:
@@ -476,13 +478,13 @@ func fmtHex(b []byte, maxBytes int) string {
 func fmtOpaque(v OpaqueValue, cfg *formatConfig) string {
 	if v.Decoded != nil && !cfg.rawOpaques {
 		if s, ok := v.Decoded.(string); ok {
-			return cfg.color.OpaqueValue.apply(s)
+			return cfg.color.OpaqueValue.Apply(s)
 		}
-		return cfg.color.OpaqueValue.apply(fmt.Sprint(v.Decoded))
+		return cfg.color.OpaqueValue.Apply(fmt.Sprint(v.Decoded))
 	}
-	rawStr := cfg.color.Bytes.apply(fmtBytesWithFormat(v.Raw, cfg))
+	rawStr := cfg.color.Bytes.Apply(fmtBytesWithFormat(v.Raw, cfg))
 	if v.TypeName != "" {
-		return cfg.color.OpaquePrefix.apply("("+v.TypeName+")") + " " + rawStr
+		return cfg.color.OpaquePrefix.Apply("("+v.TypeName+")") + " " + rawStr
 	}
 	return rawStr
 }
@@ -492,10 +494,10 @@ func fmtOpaque(v OpaqueValue, cfg *formatConfig) string {
 // "(TypeName) " when TypeName is non-empty.
 func fmtInterfaceTo(w io.Writer, v InterfaceValue, cfg *formatConfig, depth int) error {
 	if _, ok := v.Value.(NilValue); ok {
-		return writeStr(w, cfg.color.Nil.apply("nil"))
+		return writeStr(w, cfg.color.Nil.Apply("nil"))
 	}
 	if v.TypeName != "" {
-		if err := writeStr(w, cfg.color.OpaquePrefix.apply("("+v.TypeName+")")+" "); err != nil {
+		if err := writeStr(w, cfg.color.OpaquePrefix.Apply("("+v.TypeName+")")+" "); err != nil {
 			return err
 		}
 	}
@@ -510,18 +512,18 @@ func fmtStructTo(w io.Writer, v StructValue, cfg *formatConfig, depth int) error
 		name = "struct"
 	}
 	if len(v.Fields) == 0 {
-		return writeStr(w, cfg.color.TypeHeader.apply(name)+cfg.color.CloseBrace.apply("{}"))
+		return writeStr(w, cfg.color.TypeHeader.Apply(name)+cfg.color.CloseBrace.Apply("{}"))
 	}
 	prefix := strings.Repeat(cfg.indent, depth)
 	fieldIndent := strings.Repeat(cfg.indent, depth+1)
-	if err := writeStr(w, cfg.color.TypeHeader.apply(name)+cfg.color.CloseBrace.apply("{")+"\n"); err != nil {
+	if err := writeStr(w, cfg.color.TypeHeader.Apply(name)+cfg.color.CloseBrace.Apply("{")+"\n"); err != nil {
 		return err
 	}
 	for _, f := range v.Fields {
 		if err := writeStr(w, fieldIndent); err != nil {
 			return err
 		}
-		if err := writeStr(w, cfg.color.FieldName.apply(f.Name)+": "); err != nil {
+		if err := writeStr(w, cfg.color.FieldName.Apply(f.Name)+": "); err != nil {
 			return err
 		}
 		rendered := fmtValue(f.Value, cfg, depth+1)
@@ -535,7 +537,7 @@ func fmtStructTo(w io.Writer, v StructValue, cfg *formatConfig, depth int) error
 			return err
 		}
 	}
-	return writeStr(w, prefix+cfg.color.CloseBrace.apply("}"))
+	return writeStr(w, prefix+cfg.color.CloseBrace.Apply("}"))
 }
 
 // fmtMapTo renders a MapValue to w. Entries are sorted by their formatted key
@@ -543,7 +545,7 @@ func fmtStructTo(w io.Writer, v StructValue, cfg *formatConfig, depth int) error
 func fmtMapTo(w io.Writer, v MapValue, cfg *formatConfig, depth int) error {
 	header := "map[" + v.KeyType + "]" + v.ElemType
 	if len(v.Entries) == 0 {
-		return writeStr(w, cfg.color.TypeHeader.apply(header)+cfg.color.CloseBrace.apply("{}"))
+		return writeStr(w, cfg.color.TypeHeader.Apply(header)+cfg.color.CloseBrace.Apply("{}"))
 	}
 
 	// Precompute the canonical (depth-0) plain-text key string for each entry.
@@ -606,10 +608,10 @@ func fmtMapTo(w io.Writer, v MapValue, cfg *formatConfig, depth int) error {
 			if noColor {
 				return writeStr(w, plainInline)
 			}
-			colorInline := cfg.color.TypeHeader.apply(header) +
-				cfg.color.CloseBrace.apply("{") +
+			colorInline := cfg.color.TypeHeader.Apply(header) +
+				cfg.color.CloseBrace.Apply("{") +
 				strings.Join(colorParts, ", ") +
-				cfg.color.CloseBrace.apply("}")
+				cfg.color.CloseBrace.Apply("}")
 			return writeStr(w, colorInline)
 		}
 	}
@@ -617,7 +619,7 @@ func fmtMapTo(w io.Writer, v MapValue, cfg *formatConfig, depth int) error {
 	// Indented rendering.
 	prefix := strings.Repeat(cfg.indent, depth)
 	fieldIndent := strings.Repeat(cfg.indent, depth+1)
-	if err := writeStr(w, cfg.color.TypeHeader.apply(header)+cfg.color.CloseBrace.apply("{")+"\n"); err != nil {
+	if err := writeStr(w, cfg.color.TypeHeader.Apply(header)+cfg.color.CloseBrace.Apply("{")+"\n"); err != nil {
 		return err
 	}
 	for _, ke := range keyed {
@@ -644,14 +646,14 @@ func fmtMapTo(w io.Writer, v MapValue, cfg *formatConfig, depth int) error {
 			return err
 		}
 	}
-	return writeStr(w, prefix+cfg.color.CloseBrace.apply("}"))
+	return writeStr(w, prefix+cfg.color.CloseBrace.Apply("}"))
 }
 
 // fmtSliceTo renders a SliceValue to w inline when short, indented when long.
 func fmtSliceTo(w io.Writer, v SliceValue, cfg *formatConfig, depth int) error {
 	header := "[]" + v.ElemType
 	if len(v.Elems) == 0 {
-		return writeStr(w, cfg.color.TypeHeader.apply(header)+cfg.color.CloseBrace.apply("{}"))
+		return writeStr(w, cfg.color.TypeHeader.Apply(header)+cfg.color.CloseBrace.Apply("{}"))
 	}
 
 	pcfg := plainConfig(cfg)
@@ -683,17 +685,17 @@ func fmtSliceTo(w io.Writer, v SliceValue, cfg *formatConfig, depth int) error {
 			if noColor {
 				return writeStr(w, plainInline)
 			}
-			colorInline := cfg.color.TypeHeader.apply(header) +
-				cfg.color.CloseBrace.apply("{") +
+			colorInline := cfg.color.TypeHeader.Apply(header) +
+				cfg.color.CloseBrace.Apply("{") +
 				strings.Join(colorParts, ", ") +
-				cfg.color.CloseBrace.apply("}")
+				cfg.color.CloseBrace.Apply("}")
 			return writeStr(w, colorInline)
 		}
 	}
 
 	prefix := strings.Repeat(cfg.indent, depth)
 	fieldIndent := strings.Repeat(cfg.indent, depth+1)
-	if err := writeStr(w, cfg.color.TypeHeader.apply(header)+cfg.color.CloseBrace.apply("{")+"\n"); err != nil {
+	if err := writeStr(w, cfg.color.TypeHeader.Apply(header)+cfg.color.CloseBrace.Apply("{")+"\n"); err != nil {
 		return err
 	}
 	for _, e := range v.Elems {
@@ -707,14 +709,14 @@ func fmtSliceTo(w io.Writer, v SliceValue, cfg *formatConfig, depth int) error {
 			return err
 		}
 	}
-	return writeStr(w, prefix+cfg.color.CloseBrace.apply("}"))
+	return writeStr(w, prefix+cfg.color.CloseBrace.Apply("}"))
 }
 
 // fmtArrayTo renders an ArrayValue to w inline when short, indented when long.
 func fmtArrayTo(w io.Writer, v ArrayValue, cfg *formatConfig, depth int) error {
 	header := fmt.Sprintf("[%d]%s", v.Len, v.ElemType)
 	if len(v.Elems) == 0 {
-		return writeStr(w, cfg.color.TypeHeader.apply(header)+cfg.color.CloseBrace.apply("{}"))
+		return writeStr(w, cfg.color.TypeHeader.Apply(header)+cfg.color.CloseBrace.Apply("{}"))
 	}
 
 	pcfg := plainConfig(cfg)
@@ -746,17 +748,17 @@ func fmtArrayTo(w io.Writer, v ArrayValue, cfg *formatConfig, depth int) error {
 			if noColor {
 				return writeStr(w, plainInline)
 			}
-			colorInline := cfg.color.TypeHeader.apply(header) +
-				cfg.color.CloseBrace.apply("{") +
+			colorInline := cfg.color.TypeHeader.Apply(header) +
+				cfg.color.CloseBrace.Apply("{") +
 				strings.Join(colorParts, ", ") +
-				cfg.color.CloseBrace.apply("}")
+				cfg.color.CloseBrace.Apply("}")
 			return writeStr(w, colorInline)
 		}
 	}
 
 	prefix := strings.Repeat(cfg.indent, depth)
 	fieldIndent := strings.Repeat(cfg.indent, depth+1)
-	if err := writeStr(w, cfg.color.TypeHeader.apply(header)+cfg.color.CloseBrace.apply("{")+"\n"); err != nil {
+	if err := writeStr(w, cfg.color.TypeHeader.Apply(header)+cfg.color.CloseBrace.Apply("{")+"\n"); err != nil {
 		return err
 	}
 	for _, e := range v.Elems {
@@ -770,5 +772,5 @@ func fmtArrayTo(w io.Writer, v ArrayValue, cfg *formatConfig, depth int) error {
 			return err
 		}
 	}
-	return writeStr(w, prefix+cfg.color.CloseBrace.apply("}"))
+	return writeStr(w, prefix+cfg.color.CloseBrace.Apply("}"))
 }

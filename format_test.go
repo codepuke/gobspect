@@ -590,6 +590,54 @@ func TestFormatSchema_Empty(t *testing.T) {
 	assert.Equal(t, "", got)
 }
 
+// TestSchemaJSON covers the machine-readable Schema.JSON output. This is a
+// stable external contract consumed by downstream tooling so we assert the
+// exact shape.
+func TestSchemaJSON(t *testing.T) {
+	schema := gobspect.FormatSchema([]gobspect.TypeInfo{
+		{
+			ID: 65, Name: "Point", Kind: gobspect.KindStruct,
+			Fields: []gobspect.FieldInfo{
+				{Name: "X", TypeID: 2},
+				{Name: "Y", TypeID: 2},
+			},
+		},
+		{
+			ID: 66, Name: "Names", Kind: gobspect.KindSlice,
+			Elem: &gobspect.TypeRef{ID: 6, Name: "string"},
+		},
+		{
+			ID: 67, Name: "UserID", Kind: gobspect.KindGobEncoder,
+		},
+	})
+
+	out, err := schema.JSONIndent("", "  ")
+	require.NoError(t, err)
+
+	s := string(out)
+	// Top-level array.
+	assert.True(t, strings.HasPrefix(strings.TrimSpace(s), "["))
+
+	// Struct entries include fields with name+type keys.
+	assert.Contains(t, s, `"name": "Point"`)
+	assert.Contains(t, s, `"kind": "struct"`)
+	assert.Contains(t, s, `"name": "X"`)
+	assert.Contains(t, s, `"type": "int"`)
+
+	// Slice entries include a "target" rendering of the inline type.
+	assert.Contains(t, s, `"name": "Names"`)
+	assert.Contains(t, s, `"target": "[]string"`)
+
+	// Opaque types include the annotation rather than fields.
+	assert.Contains(t, s, `"name": "UserID"`)
+	assert.Contains(t, s, `"annotation": "GobEncoder"`)
+
+	// Compact form round-trips through encoding/json.
+	compact, err := schema.JSON()
+	require.NoError(t, err)
+	assert.NotContains(t, string(compact), "\n")
+}
+
 func TestFormatSchema_AnonSliceInline(t *testing.T) {
 	// A struct whose field is an anonymous (unnamed) slice. The unnamed slice
 	// type must appear inline in the field declaration, not as a top-level entry.

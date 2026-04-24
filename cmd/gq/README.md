@@ -54,9 +54,11 @@ Query expressions use dot-separated field names in the spirit of jq. A leading `
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-f`, `-file` | stdin | Input file path; if omitted, reads from stdin |
-| `-format` | `pretty` | Output format: `pretty`, `json`, `csv`, or `tsv` |
-| `-schema` | false | Print Go-style type schema and exit |
-| `-types` | false | Print type definitions as JSON and exit |
+| `-format` | `pretty` | Output format: `pretty`, `json`, `jsonl`, `csv`, or `tsv` |
+| `-schema` | false | Print type schema and exit |
+| `-schema-format` | `go` | Schema output format: `go` (Go-style declarations) or `json` (machine-readable) |
+| `-types` | false | Print raw type definitions as JSON and exit |
+| `-stats` | false | Print stream-level statistics (message counts, per-type breakdown, field presence) and exit; pairs with `-format json` |
 | `-index N` | -1 | Print only the Nth value (0-based); -1 = all |
 | `-bytes` | `hex` | Byte slice rendering: `hex`, `base64`, or `literal` |
 | `-max-bytes N` | 64 | Truncation limit for byte slices; 0 = no limit |
@@ -70,10 +72,17 @@ Query expressions use dot-separated field names in the spirit of jq. A leading `
 | `-hetero` | `first` | Heterogeneous-type handling for `csv`/`tsv`: `first`, `reject`, `union`, or `partition` (see below) |
 | `-limit N` | 0 | Stop after N results (0 = no limit) |
 | `-offset N` | 0 | Skip the first N results |
-| `-sort` | `""` | Comma-separated column names to sort by |
-| `-sort-desc` | `false` | Reverse sort order for all keys |
+| `-sort` | `""` | Comma-separated column names to sort by. Each entry may take a `:asc` or `:desc` suffix (e.g. `Name,Score:desc`) |
+| `-sort-desc` | `false` | Default direction for entries without an explicit suffix |
 | `-sort-fold` | `false` | Case-insensitive string comparison in sort |
 | `-sort-drop-missing` | `false` | Exclude rows missing all sort keys |
+| `-skip-errors` | `false` | Skip value messages that fail to decode and continue; type-def errors remain fatal |
+| `-diff PATH` | `""` | Structural diff against another gob file, aligned by index; exits 1 when changes exist |
+| `-count` | `false` | After filtering, print the number of matches and exit |
+| `-sum PATH` | `""` | Sum a numeric path over the matches and exit |
+| `-min PATH` | `""` | Minimum of a numeric path over the matches |
+| `-max PATH` | `""` | Maximum of a numeric path over the matches |
+| `-avg PATH` | `""` | Average of a numeric path over the matches |
 
 Color is enabled automatically when stdout is a terminal and disabled when piping or redirecting.
 
@@ -179,6 +188,18 @@ Each value is a discriminated-union object with a `"kind"` field:
 }
 ```
 
+Use `-compact` for single-line JSON.
+
+### JSON Lines (`-format jsonl`)
+
+One compact JSON value per line; ideal for piping into downstream tools like `jq`:
+
+```sh
+gq -format jsonl -f data.gob .Orders.* | jq 'select(.fields[].value.v == "Alice")'
+```
+
+The structure of each line is identical to the `-format json` object above, but collapsed onto a single line — no wrapping array, no indentation.
+
 ### Tabular (`-format csv` and `-format tsv`)
 
 Tabular formats export a normalized grid. Column order follows the Go type definition for the first matched struct, so sparse gob instances (where zero fields are omitted on the wire) still produce correctly aligned rows.
@@ -210,6 +231,53 @@ B5,4.50
 
 Field projections are always accepted regardless of source type, so `.ID,Customer` works across any struct that has those fields.
 
+### Structural diff (`-diff`)
+
+Compares two gob streams, aligning top-level values by index, and emits a per-position delta tree. Useful for spotting regressions between archived snapshots:
+
+```sh
+gq -diff snapshot-2025-01.gob -f snapshot-2025-02.gob
+```
+
+Exits 0 when the streams are identical, 1 when any position differs. Pair with `-format json` for a machine-readable delta document suitable for review tools.
+
+Text output is colorized with ANSI escapes when stdout is a TTY — additions in green, removals in red, struct/map/slice headers in bold cyan, stream-position markers (`[N]`) dimmed. Use `-no-color` to force plain output (for piping into `less -R`-less readers or file redirects), or `-color` to force color on regardless of detection. `-format json` output is always plain.
+
+### Aggregation (`-count`, `-sum`, `-min`, `-max`, `-avg`)
+
+Reduce the match set to a single scalar and print it. The aggregator takes a path expression relative to each match (for `-sum`/`-min`/`-max`/`-avg`); `-count` needs no path.
+
+```sh
+gq -count -f orders.gob .Orders.*
+gq -sum Price -f orders.gob .Items.*
+gq -avg Score -f runs.gob '.Results.*[Status=ok]'
+```
+
+These are single-pass over the stream and never materialise the full match set in memory.
+
+### Statistics (`-stats`)
+
+Summarises a stream without emitting individual values. Handy for sizing a file, spotting the dominant types, or seeing which struct fields are populated most often:
+
+```
+$ gq -stats -f data.gob
+messages: 1507 (values: 1500, type defs: 7)
+body bytes: 347289
+opaque values: 2304 decoded, 0 undecoded
+
+by type:
+  Order                     1500 values    347012 bytes  (struct)
+    Customer                 1500 (100.0%)
+    Items                    1498 ( 99.9%)
+    ...
+```
+
+Pair with `-format json` for machine-readable output suitable for aggregation:
+
+```sh
+gq -stats -format json -f data.gob | jq '.ByType[0]'
+```
+
 ### Schema (`-schema`)
 
 Renders the Go-style type declarations embedded in the stream:
@@ -228,6 +296,14 @@ type Order struct {
   PlacedAt  Time  // GobEncoder
 }
 ```
+
+Pass `-schema-format json` for a machine-readable rendering suitable for downstream tooling (code generators, documentation pipelines, compatibility checkers):
+
+```sh
+gq -schema -schema-format json -f data.gob
+```
+
+The output is a JSON array of type declarations with `name`, `kind`, and kind-specific keys (`fields`, `target`, `annotation`).
 
 ## Pagination
 
@@ -256,8 +332,8 @@ gq -offset 20 -limit 10 -f data.gob .Orders.*
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-sort` | `""` | Comma-separated column names to sort by |
-| `-sort-desc` | `false` | Reverse sort order for all keys |
+| `-sort` | `""` | Comma-separated column names to sort by. Each entry may take a `:asc` or `:desc` suffix (e.g. `Name,Score:desc`) |
+| `-sort-desc` | `false` | Default direction for entries without an explicit suffix |
 | `-sort-fold` | `false` | Case-insensitive string comparison in sort |
 | `-sort-drop-missing` | `false` | Exclude rows missing all sort keys |
 
@@ -302,7 +378,7 @@ gq -sort Date -offset 20 -limit 10 .Orders.*
 
 ### Interaction with `-hetero`
 
-- **`-hetero partition`**: the current implementation sorts across the full match set rather than within each partition. Per-partition sort is not yet implemented.
+- **`-hetero partition`**: `-sort` sorts within each partition independently; partitions are emitted in wire-arrival order of their type.
 - **`-hetero union`**: `-sort` sorts across the unified row set. Rows from an earlier type that lack a sort key introduced by a later type's expanded columns follow the `-sort-drop-missing` rule.
 
 ### Examples
@@ -313,6 +389,9 @@ gq -sort Customer .Orders.*
 
 # Multi-key sort: status then date, descending
 gq -sort Status,Date -sort-desc .Orders.*
+
+# Mixed directions per-key: status ascending, date descending
+gq -sort Status,Date:desc .Orders.*
 
 # Paginate sorted results
 gq -sort Date -offset 20 -limit 10 .Orders.*

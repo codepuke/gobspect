@@ -327,3 +327,20 @@ keys, ok = query.Keys(root, "Meta")
 ```
 
 Returns `(nil, false)` for scalar, opaque, and nil nodes that have no navigable children.
+
+### Static schema resolution: `SchemaAt`
+
+```go
+func SchemaAt(schema *gobspect.Schema, rootTypeExpr string, p Path) (string, error)
+```
+
+`SchemaAt` walks a `Path` against a `*gobspect.Schema` (not a value) and returns the type expression of the result. It is purely structural: use it to answer "what type will this query produce?" without running the query against any data.
+
+```go
+schema, _ := ins.Stream(r).Schema()
+p, _ := query.Parse("..Price")
+t, err := query.SchemaAt(schema, "Order", p)
+// t == "float"
+```
+
+When a path contains a recursive-descent segment (`..`), `SchemaAt` widens its search to every type reachable from the current candidates and reports the **union** of distinct result types as a pipe-joined string (`"int|string"`) in sorted order. For `map[string]T` fields, the value type `T` is also a candidate because any runtime string key could match the descent name.

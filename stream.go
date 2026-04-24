@@ -17,9 +17,11 @@ import (
 // A Stream does not own its reader. The caller is responsible for closing the
 // underlying io.Reader if needed.
 type Stream struct {
-	sd       *streamDecoder
-	vd       *valueDecoder
-	consumed bool
+	sd          *streamDecoder
+	vd          *valueDecoder
+	consumed    bool
+	skipCorrupt bool
+	skipCount   int
 }
 
 // Stream begins decoding the gob stream from r. Decoding is lazy: nothing is
@@ -29,7 +31,7 @@ type Stream struct {
 func (ins *Inspector) Stream(r io.Reader) *Stream {
 	sd := newStreamDecoder(wrapWithLimit(r, ins.maxBytes))
 	vd := newValueDecoder(ins, sd)
-	return &Stream{sd: sd, vd: vd}
+	return &Stream{sd: sd, vd: vd, skipCorrupt: ins.skipCorruptValues}
 }
 
 // drainSeq returns a fresh iteration sequence backed by sd.r. Each call
@@ -37,28 +39,72 @@ func (ins *Inspector) Stream(r io.Reader) *Stream {
 func (s *Stream) drainSeq() iter.Seq2[Value, error] {
 	return func(yield func(Value, error) bool) {
 		for {
-			rawID, msgR, err := s.sd.nextRawMessage()
+			rawID, msgR, _, err := s.sd.nextRawMessage()
 			if err == io.EOF {
 				return
 			}
 			if err != nil {
-				yield(nil, err)
+				yield(nil, s.sd.wrapErr(err))
 				return
 			}
 			if rawID < 0 {
 				if err := s.sd.processTypeDef(int(-rawID), msgR); err != nil {
-					yield(nil, err)
+					yield(nil, s.sd.wrapErr(err))
 					return
 				}
+				s.sd.advanceMessage()
 			} else {
 				v, err := s.vd.decodeTopLevelValue(int(rawID), &messageReader{cur: msgR})
 				if err != nil {
-					yield(nil, err)
+					if s.skipCorrupt {
+						s.skipCount++
+						s.sd.advanceMessage()
+						continue
+					}
+					yield(nil, s.sd.wrapErr(err))
 					return
 				}
+				s.sd.advanceMessage()
 				if !yield(v, nil) {
 					return
 				}
+			}
+		}
+	}
+}
+
+// Messages returns an iterator that yields one [MessageInfo] per length-
+// prefixed gob message in the stream, *without* decoding values. This is a
+// cheap way to profile a stream (per-message byte count, type-ID distribution)
+// or to locate message boundaries for tooling that processes the raw frames.
+//
+// The stream is consumed by Messages just like by Values: you cannot call
+// Values on a stream after Messages has drained it, and you cannot call
+// Messages twice.
+//
+// Unlike [Stream.Values], Messages does not register type definitions against
+// the decoder's type registry. If you need both decoded values and per-
+// message framing, use Values and call [Stream.TypeByID] / [Stream.Types] at
+// each step, or read the underlying Stream.Messages separately on a second
+// Inspector.Stream over a rewound reader.
+func (s *Stream) Messages() iter.Seq2[MessageInfo, error] {
+	if s.consumed {
+		panic("gobspect: Messages called on an already-consumed Stream")
+	}
+	s.consumed = true
+	return func(yield func(MessageInfo, error) bool) {
+		for {
+			_, _, info, err := s.sd.nextRawMessage()
+			if err == io.EOF {
+				return
+			}
+			if err != nil {
+				yield(MessageInfo{}, s.sd.wrapErr(err))
+				return
+			}
+			s.sd.advanceMessage()
+			if !yield(info, nil) {
+				return
 			}
 		}
 	}
@@ -98,6 +144,11 @@ func (s *Stream) Values() iter.Seq2[Value, error] {
 func (s *Stream) Types() []TypeInfo {
 	return s.sd.types
 }
+
+// SkipCount reports the number of value messages silently skipped so far
+// because [WithSkipCorruptValues] is enabled and they failed to decode.
+// When WithSkipCorruptValues is disabled this is always zero.
+func (s *Stream) SkipCount() int { return s.skipCount }
 
 // TypeByID returns the TypeInfo for the given stream-scoped type ID, if known.
 func (s *Stream) TypeByID(id int) (TypeInfo, bool) {

@@ -1,7 +1,6 @@
 package gobspect
 
 import (
-	"bufio"
 	"bytes"
 	"testing"
 
@@ -31,7 +30,7 @@ func TestDecodeStructValue_LargeDeltaNoPanic(t *testing.T) {
 	}
 
 	ins := New()
-	sd := newStreamDecoder(bufio.NewReader(bytes.NewReader(nil)))
+	sd := newStreamDecoder(wrapWithLimit(bytes.NewReader(nil), 0))
 	vd := newValueDecoder(ins, sd)
 	mr := &messageReader{cur: bytes.NewReader(overflowDelta)}
 
@@ -59,7 +58,7 @@ func TestDecodeStructValue_DeltaEqualToFieldCount_Error(t *testing.T) {
 	deltaBytes := []byte{3} // delta=3 > len(Fields)=2 → rejected
 
 	ins := New()
-	sd := newStreamDecoder(bufio.NewReader(bytes.NewReader(nil)))
+	sd := newStreamDecoder(wrapWithLimit(bytes.NewReader(nil), 0))
 	vd := newValueDecoder(ins, sd)
 	mr := &messageReader{cur: bytes.NewReader(deltaBytes)}
 

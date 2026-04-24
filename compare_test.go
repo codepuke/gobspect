@@ -8,6 +8,143 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestEqual(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b gobspect.Value
+		want bool
+	}{
+		{"both nil", gobspect.NilValue{}, gobspect.NilValue{}, true},
+		{"nil vs int", gobspect.NilValue{}, gobspect.IntValue{V: 0}, false},
+		{"same bool", gobspect.BoolValue{V: true}, gobspect.BoolValue{V: true}, true},
+		{"diff bool", gobspect.BoolValue{V: true}, gobspect.BoolValue{V: false}, false},
+		{"same int", gobspect.IntValue{V: 42}, gobspect.IntValue{V: 42}, true},
+		{"int vs float no coercion", gobspect.IntValue{V: 5}, gobspect.FloatValue{V: 5}, false},
+		{"uint vs int no coercion", gobspect.UintValue{V: 5}, gobspect.IntValue{V: 5}, false},
+		{"same string", gobspect.StringValue{V: "x"}, gobspect.StringValue{V: "x"}, true},
+		{"diff string", gobspect.StringValue{V: "x"}, gobspect.StringValue{V: "y"}, false},
+		{"same bytes", gobspect.BytesValue{V: []byte{1, 2}}, gobspect.BytesValue{V: []byte{1, 2}}, true},
+		{"diff bytes", gobspect.BytesValue{V: []byte{1, 2}}, gobspect.BytesValue{V: []byte{1, 3}}, false},
+		{"same complex", gobspect.ComplexValue{Real: 1, Imag: 2}, gobspect.ComplexValue{Real: 1, Imag: 2}, true},
+		{"diff complex imag", gobspect.ComplexValue{Real: 1, Imag: 2}, gobspect.ComplexValue{Real: 1, Imag: 3}, false},
+		{
+			"same opaque",
+			gobspect.OpaqueValue{TypeName: "T", Encoding: "gob", Raw: []byte{1, 2}},
+			gobspect.OpaqueValue{TypeName: "T", Encoding: "gob", Raw: []byte{1, 2}},
+			true,
+		},
+		{
+			"opaque diff raw",
+			gobspect.OpaqueValue{TypeName: "T", Encoding: "gob", Raw: []byte{1, 2}},
+			gobspect.OpaqueValue{TypeName: "T", Encoding: "gob", Raw: []byte{1, 3}},
+			false,
+		},
+		{
+			"opaque diff type name",
+			gobspect.OpaqueValue{TypeName: "A", Encoding: "gob", Raw: []byte{1}},
+			gobspect.OpaqueValue{TypeName: "B", Encoding: "gob", Raw: []byte{1}},
+			false,
+		},
+		{
+			"same struct ordered",
+			gobspect.StructValue{TypeName: "T", Fields: []gobspect.Field{
+				{Name: "A", Value: gobspect.IntValue{V: 1}},
+				{Name: "B", Value: gobspect.StringValue{V: "x"}},
+			}},
+			gobspect.StructValue{TypeName: "T", Fields: []gobspect.Field{
+				{Name: "A", Value: gobspect.IntValue{V: 1}},
+				{Name: "B", Value: gobspect.StringValue{V: "x"}},
+			}},
+			true,
+		},
+		{
+			"struct fields reordered",
+			gobspect.StructValue{Fields: []gobspect.Field{
+				{Name: "A", Value: gobspect.IntValue{V: 1}},
+				{Name: "B", Value: gobspect.IntValue{V: 2}},
+			}},
+			gobspect.StructValue{Fields: []gobspect.Field{
+				{Name: "B", Value: gobspect.IntValue{V: 2}},
+				{Name: "A", Value: gobspect.IntValue{V: 1}},
+			}},
+			false,
+		},
+		{
+			"struct diff type name",
+			gobspect.StructValue{TypeName: "A"},
+			gobspect.StructValue{TypeName: "B"},
+			false,
+		},
+		{
+			"map order-insensitive",
+			gobspect.MapValue{Entries: []gobspect.MapEntry{
+				{Key: gobspect.StringValue{V: "a"}, Value: gobspect.IntValue{V: 1}},
+				{Key: gobspect.StringValue{V: "b"}, Value: gobspect.IntValue{V: 2}},
+			}},
+			gobspect.MapValue{Entries: []gobspect.MapEntry{
+				{Key: gobspect.StringValue{V: "b"}, Value: gobspect.IntValue{V: 2}},
+				{Key: gobspect.StringValue{V: "a"}, Value: gobspect.IntValue{V: 1}},
+			}},
+			true,
+		},
+		{
+			"map diff value",
+			gobspect.MapValue{Entries: []gobspect.MapEntry{
+				{Key: gobspect.StringValue{V: "a"}, Value: gobspect.IntValue{V: 1}},
+			}},
+			gobspect.MapValue{Entries: []gobspect.MapEntry{
+				{Key: gobspect.StringValue{V: "a"}, Value: gobspect.IntValue{V: 2}},
+			}},
+			false,
+		},
+		{
+			"same slice",
+			gobspect.SliceValue{Elems: []gobspect.Value{gobspect.IntValue{V: 1}, gobspect.IntValue{V: 2}}},
+			gobspect.SliceValue{Elems: []gobspect.Value{gobspect.IntValue{V: 1}, gobspect.IntValue{V: 2}}},
+			true,
+		},
+		{
+			"slice diff order",
+			gobspect.SliceValue{Elems: []gobspect.Value{gobspect.IntValue{V: 1}, gobspect.IntValue{V: 2}}},
+			gobspect.SliceValue{Elems: []gobspect.Value{gobspect.IntValue{V: 2}, gobspect.IntValue{V: 1}}},
+			false,
+		},
+		{
+			"same array",
+			gobspect.ArrayValue{Len: 2, Elems: []gobspect.Value{gobspect.IntValue{V: 1}, gobspect.IntValue{V: 2}}},
+			gobspect.ArrayValue{Len: 2, Elems: []gobspect.Value{gobspect.IntValue{V: 1}, gobspect.IntValue{V: 2}}},
+			true,
+		},
+		{
+			"array diff len",
+			gobspect.ArrayValue{Len: 2, Elems: []gobspect.Value{gobspect.IntValue{V: 1}, gobspect.IntValue{V: 2}}},
+			gobspect.ArrayValue{Len: 3, Elems: []gobspect.Value{gobspect.IntValue{V: 1}, gobspect.IntValue{V: 2}}},
+			false,
+		},
+		{
+			"interface unwrapped",
+			gobspect.InterfaceValue{TypeName: "T", Value: gobspect.IntValue{V: 7}},
+			gobspect.IntValue{V: 7},
+			true,
+		},
+		{
+			"interface outer name ignored",
+			gobspect.InterfaceValue{TypeName: "A", Value: gobspect.IntValue{V: 7}},
+			gobspect.InterfaceValue{TypeName: "B", Value: gobspect.IntValue{V: 7}},
+			true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := gobspect.Equal(tc.a, tc.b)
+			assert.Equal(t, tc.want, got)
+			// Equal must be symmetric.
+			assert.Equal(t, tc.want, gobspect.Equal(tc.b, tc.a), "Equal should be symmetric")
+		})
+	}
+}
+
 func TestCompareValuesCrossKind(t *testing.T) {
 	tests := []struct {
 		name  string

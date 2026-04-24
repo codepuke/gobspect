@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"net/netip"
 	"strings"
 	"time"
 )
@@ -51,12 +52,13 @@ func parseTimeBytes(data []byte) (unixSec int64, nsec int32, offsetSec int, err 
 		offSec = int(offsetMin) * 60
 	}
 	if version == 2 {
-		// stdlib UnmarshalBinary reads byte 15 as an unsigned byte (int(buf[2])),
-		// not as int8. For negative sub-minute LMT offsets the encoder stores a
-		// negative int8 value (e.g. -2 → 0xFE), but stdlib decodes it as the
-		// positive value 254. We match that behavior so that the reconstructed
-		// zone offset is identical to what stdlib would return for the same blob.
-		offSec += int(data[15])
+		// Sub-minute timezone offsets (LMT entries for historical dates) may
+		// be negative; the encoder emits them as a signed int8. The stdlib's
+		// time.UnmarshalBinary reads this byte as uint8 and gets the wrong
+		// sign for values like 0xFE (see BUG_REPORT.md). We read it as int8
+		// here to recover the correct offset — our decoder is a clean-room
+		// reimplementation, so we deliberately diverge from the stdlib bug.
+		offSec += int(int8(data[15]))
 	}
 
 	// Convert from internal epoch (year 1) to Unix epoch (year 1970).
@@ -323,6 +325,43 @@ func decodeShopspringDecimal(data []byte) (any, error) {
 		return "-" + result, nil
 	}
 	return result, nil
+}
+
+// decodeNetipAddr decodes a net/netip.Addr BinaryMarshaler blob.
+//
+// The wire format is the stdlib's MarshalBinary output: 4 bytes for IPv4, 16
+// bytes for IPv6, or 16 bytes plus a zone identifier for IPv6 with zone.
+// Decoding is delegated to netip.Addr.UnmarshalBinary so we track the stdlib
+// exactly; the decoded value is the canonical string form. The netip type
+// itself never enters OpaqueValue.Decoded — only its string.
+func decodeNetipAddr(data []byte) (any, error) {
+	var a netip.Addr
+	if err := a.UnmarshalBinary(data); err != nil {
+		return nil, fmt.Errorf("netip.Addr: %w", err)
+	}
+	return a.String(), nil
+}
+
+// decodeNetipPrefix decodes a net/netip.Prefix BinaryMarshaler blob.
+// Delegates to netip.Prefix.UnmarshalBinary; the decoded value is the
+// canonical string form (e.g. "10.0.0.0/24").
+func decodeNetipPrefix(data []byte) (any, error) {
+	var p netip.Prefix
+	if err := p.UnmarshalBinary(data); err != nil {
+		return nil, fmt.Errorf("netip.Prefix: %w", err)
+	}
+	return p.String(), nil
+}
+
+// decodeNetipAddrPort decodes a net/netip.AddrPort BinaryMarshaler blob.
+// Delegates to netip.AddrPort.UnmarshalBinary; the decoded value is the
+// canonical string form (e.g. "1.2.3.4:80", "[fe80::1]:8080").
+func decodeNetipAddrPort(data []byte) (any, error) {
+	var ap netip.AddrPort
+	if err := ap.UnmarshalBinary(data); err != nil {
+		return nil, fmt.Errorf("netip.AddrPort: %w", err)
+	}
+	return ap.String(), nil
 }
 
 // decodeUUID decodes a UUID BinaryMarshaler blob (16 raw bytes, RFC 4122 layout).

@@ -32,26 +32,33 @@ for _, v := range sorted {
 ## SortSpec
 
 ```go
+type SortKey struct {
+    Field string
+    Desc  bool // true = descending for this key
+}
+
 type SortSpec struct {
-    Keys        []string // field names in priority order (first key is primary)
-    Desc        bool     // applies to all keys
-    Fold        bool     // case-insensitive string comparison
-    DropMissing bool     // exclude rows missing ALL sort keys
+    Keys        []SortKey // in priority order (first key is primary)
+    Fold        bool      // case-insensitive string comparison
+    DropMissing bool      // exclude rows missing ALL sort keys
 }
 ```
 
-Build a `SortSpec` with `ParseSortSpec` or by constructing it directly.
+Each key carries its own direction, so a single spec can mix ascending and descending. Build a `SortSpec` with `ParseSortSpec` or by constructing it directly.
 
 ### ParseSortSpec
 
 ```go
-func ParseSortSpec(keysFlag string, desc, fold, dropMissing bool) (SortSpec, error)
+func ParseSortSpec(keysFlag string, defaultDesc, fold, dropMissing bool) (SortSpec, error)
 ```
 
-`keysFlag` is a comma-separated list of field names. Returns an error if `keysFlag` is empty or contains empty field names after splitting.
+`keysFlag` is a comma-separated list of field names. Each entry may include a direction suffix: `Name:asc` or `Score:desc` (case-insensitive). Entries without a suffix inherit `defaultDesc`. Returns an error if `keysFlag` is empty, an entry is empty, or a suffix is unrecognized.
 
 ```go
-// Sort by "Score" descending, then "Name" ascending (Desc applies to all keys).
+// Sort by "Name" ascending, then "Score" descending.
+spec, err := sortval.ParseSortSpec("Name,Score:desc", false, false, false)
+
+// Sort everything descending unless an explicit ":asc" suffix appears.
 spec, err := sortval.ParseSortSpec("Score,Name", true, false, false)
 ```
 
@@ -61,7 +68,7 @@ spec, err := sortval.ParseSortSpec("Score,Name", true, false, false)
 func (s SortSpec) Compare(a, b gobspect.Value) int
 ```
 
-Compares two values by the spec's `Keys` in priority order. Uses [`gobspect.CompareValues`](../README.md) for normal comparison or [`gobspect.CompareValuesFold`](../README.md) when `Fold` is true. Returns -1, 0, or +1. If `Desc` is true, the result is negated. Fields missing from a row produce a `NilValue{}` for comparison.
+Compares two values by the spec's `Keys` in priority order. Uses [`gobspect.CompareValues`](../README.md) for normal comparison or [`gobspect.CompareValuesFold`](../README.md) when `Fold` is true. Returns -1, 0, or +1. Each key's `Desc` flag is applied independently. Fields missing from a row produce a `NilValue{}` for comparison.
 
 ## SortMatches
 

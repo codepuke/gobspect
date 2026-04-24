@@ -41,7 +41,7 @@ func encodeResolveStream(tb testing.TB) *bytes.Buffer {
 //   - Adding a slice of an unknown type leaves Elem.Name empty.
 //   - Adding the element type back-fills Elem.Name in the slice TypeInfo.
 func TestStream_IncrementalNameResolution(t *testing.T) {
-	sd := newStreamDecoder(strings.NewReader(""))
+	sd := newStreamDecoder(wrapWithLimit(strings.NewReader(""), 0))
 
 	// Register type 65: a slice whose Elem (type 66) is not yet known.
 	sliceDef := wireTypeDef{SliceT: &wireSliceType{

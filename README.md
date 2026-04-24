@@ -150,6 +150,24 @@ for _, ti := range stream.Types() {
 
 `Stream.Types` returns the live slice of `TypeInfo` for every type definition encountered in stream order. It grows incrementally as the stream is consumed.
 
+### Inspecting raw framing
+
+`Stream.Messages` returns an `iter.Seq2[MessageInfo, error]` that yields one entry per length-prefixed frame in the stream *without* decoding the value body. Each `MessageInfo` carries the byte `Offset`, `BodyLen`, signed `TypeID`, and the `Body` bytes. This is the right tool for size profiling, building a frame index, or comparing wire layouts:
+
+```go
+for m, err := range ins.Stream(r).Messages() {
+    if err != nil { log.Fatal(err) }
+    fmt.Printf("msg %d @%d len=%d typeID=%d typeDef=%v\n",
+        m.Index, m.Offset, m.BodyLen, m.TypeID, m.IsTypeDef())
+}
+```
+
+`Stream.Stats` wraps a full decode pass and returns population-level counts (per-type record totals, body byte consumption, struct field presence rates, opaque decoder coverage). Use it for a quick profile of an unknown file.
+
+### Structural diff
+
+The `gobspect/diff` subpackage compares two `Value` trees or two streams position-by-position, producing a `Delta` AST that can be rendered as text or JSON. The CLI exposes it via `gq -diff PATH` (exit code 1 when there are changes).
+
 ### Compressed streams
 
 `Inspector.Stream` accepts any `io.Reader`, so compressed streams work by wrapping the reader before passing it in. For gzip, use `compress/gzip.NewReader`; apply the same pattern for any other compression format.

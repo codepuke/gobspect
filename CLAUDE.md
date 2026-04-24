@@ -16,7 +16,11 @@ When asked to implement a PRD.md:
 ## Key Design Decisions
 
 - **Decode only.** No encoding support. Do not add encoding functionality.
-- **No runtime dependency on inspected types.** Opaque type decoders (time.Time, big.Int, UUID, etc.) are self-contained reimplementations. Never import `time`, `math/big`, `github.com/google/uuid`, or similar in the decoder layer (`decode.go`, `valuedecode.go`, `builtins.go`, `wire.go`). Presentation layers (`format.go`, `json.go`) and test code may import them when needed.
+- **Opaque type decoders don't leak inspected types through the AST.** The Value AST (`types.go`) must never expose `time.Time`, `big.Int`, `uuid.UUID`, or similar through field types. `OpaqueValue.Decoded` is `any` and holds formatted strings or primitive Go values only — never stdlib or third-party wrapper types. This lets consumers read the AST without depending on the original Go types.
+  - **Stdlib imports are allowed in `builtins.go`** when they aid correctness (e.g., `big.Float.GobDecode`) or simplify formatting (e.g., `time.FixedZone` + `time.Format`). The stdlib is always available to consumers, so using it internally adds no dependency burden.
+  - **Third-party imports of inspected types are forbidden.** Never import `github.com/google/uuid`, `github.com/shopspring/decimal`, or similar — reimplement their wire formats. This keeps `go.mod` minimal and protects decoders from the upstream type being removed, renamed, or having its wire format drift.
+  - `decode.go`, `valuedecode.go`, and `wire.go` should remain free of inspected-type imports even from stdlib — those files decode the wire format itself, not opaque blobs, and have no reason to touch inspected types.
+  - Presentation layers (`format.go`, `json.go`) and test code may import inspected types when needed.
 - **Two-layer output:** a structural `Value` AST that preserves all wire information, and a `Format()` function for human-readable rendering. Never discard wire information in the AST to make formatting easier.
 - **Extensible opaque decoding.** Users register `DecoderFunc` functions keyed by type name. Built-in decoders are pre-registered and can be overridden.
 

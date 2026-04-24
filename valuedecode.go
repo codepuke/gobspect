@@ -365,7 +365,7 @@ func (vd *valueDecoder) decodeInterface(r *messageReader) (Value, error) {
 		id, err := decodeInt(r)
 		if err == io.EOF {
 			// Current message body exhausted; read the next outer message.
-			rawID, msgR, streamErr := vd.sd.nextRawMessage()
+			rawID, msgR, _, streamErr := vd.sd.nextRawMessage()
 			if streamErr != nil {
 				return nil, fmt.Errorf("gob: reading continuation for interface %q: %w", typeName, streamErr)
 			}
@@ -374,10 +374,12 @@ func (vd *valueDecoder) decodeInterface(r *messageReader) (Value, error) {
 				if err2 := vd.sd.processTypeDef(int(-rawID), msgR); err2 != nil {
 					return nil, err2
 				}
+				vd.sd.advanceMessage()
 				r.cur = msgR // now exhausted; loop will read another message
 				continue
 			}
 			// Positive type ID: the rest of this message is our value bytes.
+			vd.sd.advanceMessage()
 			r.cur = msgR
 			concreteTypeID = int(rawID)
 			break

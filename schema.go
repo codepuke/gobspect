@@ -1,6 +1,7 @@
 package gobspect
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"slices"
@@ -112,6 +113,50 @@ func (s *Schema) FormatTo(w io.Writer, opts ...SchemaFormatOption) error {
 	return schemaFormatTo(w, s, cfg)
 }
 
+// JSON returns a compact machine-readable representation of the schema. The
+// output is an array of type declarations with stable keys; downstream tools
+// (code generators, documentation, compatibility checkers) can consume it
+// without parsing Go-style syntax.
+func (s *Schema) JSON() ([]byte, error) {
+	return json.Marshal(schemaJSONPayload(s))
+}
+
+// JSONIndent is like [Schema.JSON] but formats the output with the given
+// indentation (see [encoding/json.MarshalIndent]).
+func (s *Schema) JSONIndent(prefix, indent string) ([]byte, error) {
+	return json.MarshalIndent(schemaJSONPayload(s), prefix, indent)
+}
+
+// schemaJSONPayload builds the ordered map shape we serialize. Each type
+// appears as {name, kind, fields?, target?, annotation?}.
+func schemaJSONPayload(s *Schema) []map[string]any {
+	out := make([]map[string]any, 0, len(s.Types))
+	for _, t := range s.Types {
+		entry := map[string]any{
+			"name": t.Name,
+			"kind": t.Kind.String(),
+		}
+		switch t.Kind {
+		case KindStruct:
+			fields := make([]map[string]any, 0, len(t.Fields))
+			for _, f := range t.Fields {
+				m := map[string]any{"name": f.Name, "type": f.Type}
+				if f.Annotation != "" {
+					m["annotation"] = f.Annotation
+				}
+				fields = append(fields, m)
+			}
+			entry["fields"] = fields
+		case KindSlice, KindArray, KindMap:
+			entry["target"] = t.TargetType
+		case KindGobEncoder, KindBinaryMarshaler, KindTextMarshaler:
+			entry["annotation"] = t.Annotation
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
 // TypeByName locates a top-level type declaration by its name.
 func (s *Schema) TypeByName(name string) (*TypeDecl, bool) {
 	for i := range s.Types {
@@ -143,7 +188,7 @@ func schemaFormatTo(w io.Writer, s *Schema, cfg *formatConfig) error {
 		case KindStruct:
 			if len(t.Fields) == 0 {
 				_, err := io.WriteString(w,
-					clr.Number.apply("type")+" "+clr.TypeHeader.apply(t.Name)+" struct{}")
+					clr.Number.Apply("type")+" "+clr.TypeHeader.Apply(t.Name)+" struct{}")
 				if err != nil {
 					return err
 				}
@@ -158,40 +203,40 @@ func schemaFormatTo(w io.Writer, s *Schema, cfg *formatConfig) error {
 				}
 			}
 
-			line := clr.Number.apply("type") + " " + clr.TypeHeader.apply(t.Name) + " struct {\n"
+			line := clr.Number.Apply("type") + " " + clr.TypeHeader.Apply(t.Name) + " struct {\n"
 			if _, err := io.WriteString(w, line); err != nil {
 				return err
 			}
 			for _, f := range t.Fields {
 				fieldLine := indent +
-					clr.FieldName.apply(f.Name) +
+					clr.FieldName.Apply(f.Name) +
 					strings.Repeat(" ", maxLen-len(f.Name)+2) +
 					f.Type
 				if f.Annotation != "" {
-					fieldLine += "  " + clr.OpaquePrefix.apply("// "+f.Annotation)
+					fieldLine += "  " + clr.OpaquePrefix.Apply("// "+f.Annotation)
 				}
 				fieldLine += "\n"
 				if _, err := io.WriteString(w, fieldLine); err != nil {
 					return err
 				}
 			}
-			if _, err := io.WriteString(w, cfg.color.CloseBrace.apply("}")); err != nil {
+			if _, err := io.WriteString(w, cfg.color.CloseBrace.Apply("}")); err != nil {
 				return err
 			}
 
 		case KindMap, KindSlice, KindArray:
-			line := clr.Number.apply("type") + " " + clr.TypeHeader.apply(t.Name) + " " + t.TargetType
+			line := clr.Number.Apply("type") + " " + clr.TypeHeader.Apply(t.Name) + " " + t.TargetType
 			if _, err := io.WriteString(w, line); err != nil {
 				return err
 			}
 		case KindGobEncoder, KindBinaryMarshaler, KindTextMarshaler:
-			line := clr.Number.apply("type") + " " + clr.TypeHeader.apply(t.Name) +
-				" " + clr.OpaquePrefix.apply("// "+t.Annotation)
+			line := clr.Number.Apply("type") + " " + clr.TypeHeader.Apply(t.Name) +
+				" " + clr.OpaquePrefix.Apply("// "+t.Annotation)
 			if _, err := io.WriteString(w, line); err != nil {
 				return err
 			}
 		default:
-			line := clr.OpaquePrefix.apply("// type " + t.Name)
+			line := clr.OpaquePrefix.Apply("// type " + t.Name)
 			if _, err := io.WriteString(w, line); err != nil {
 				return err
 			}

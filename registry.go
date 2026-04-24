@@ -31,4 +31,10 @@ func registerBuiltins(ins *Inspector) {
 	// so callers can look up the decoder regardless of which alias is in use.
 	ins.decoders["decimal.Decimal"] = decodeShopspringDecimal
 	ins.decoders["shopspring/decimal.Decimal"] = decodeShopspringDecimal
+
+	// net/netip types (BinaryMarshaler). TypeName is the CommonType.Name
+	// the gob encoder produces for each type.
+	ins.decoders["netip.Addr"] = decodeNetipAddr
+	ins.decoders["netip.Prefix"] = decodeNetipPrefix
+	ins.decoders["netip.AddrPort"] = decodeNetipAddrPort
 }

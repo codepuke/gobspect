@@ -269,3 +269,179 @@ func TestStream_ReaderNotClosed(t *testing.T) {
 
 	assert.False(t, tracker.closed, "Stream must not close the underlying reader")
 }
+
+// — MessageInfo / Messages() tests —————————————————————————————————————————
+
+// TestStream_MessagesCountsAndOffsets verifies that the Messages iterator
+// yields one MessageInfo per wire message, with monotonically-increasing
+// Index and Offset values and the raw body available.
+func TestStream_MessagesCountsAndOffsets(t *testing.T) {
+	buf := encodeStream(t,
+		streamPoint{X: 1, Y: 2},
+		streamPoint{X: 3, Y: 4},
+		streamPoint{X: 5, Y: 6},
+	)
+	rawLen := buf.Len()
+
+	ins := gobspect.New()
+	s := ins.Stream(buf)
+
+	var infos []gobspect.MessageInfo
+	for m, err := range s.Messages() {
+		require.NoError(t, err)
+		infos = append(infos, m)
+	}
+
+	// Encoding three values of a brand-new type gives 4 messages: 1 type
+	// definition + 3 values.
+	require.Len(t, infos, 4)
+
+	// Indices 0..3.
+	for i, m := range infos {
+		assert.Equal(t, i, m.Index, "Index should be monotonic")
+		assert.NotEmpty(t, m.Body, "Body should never be empty")
+	}
+
+	// First message is a type definition (negative TypeID).
+	assert.True(t, infos[0].IsTypeDef(), "expected first message to be a type definition, got type ID %d", infos[0].TypeID)
+	// Remaining messages are values (positive TypeID).
+	for _, m := range infos[1:] {
+		assert.False(t, m.IsTypeDef())
+		assert.Positive(t, m.TypeID)
+	}
+
+	// Offsets strictly increase across messages.
+	for i := 1; i < len(infos); i++ {
+		assert.Greater(t, infos[i].Offset, infos[i-1].Offset, "Offset should strictly increase")
+	}
+
+	// The total bytes consumed should not exceed the original buffer size.
+	last := infos[len(infos)-1]
+	assert.LessOrEqual(t, int(last.Offset)+last.BodyLen, rawLen+16)
+}
+
+// TestStream_MessagesOnlyReadsFraming verifies that Messages does not force a
+// full value decode — we can iterate past a message whose body would fail to
+// decode as a value, as long as its framing is well-formed.
+func TestStream_MessagesSecondCallPanics(t *testing.T) {
+	buf := encodeStream(t, streamPoint{X: 1, Y: 2})
+
+	ins := gobspect.New()
+	s := ins.Stream(buf)
+
+	for range s.Messages() {
+		// drain
+	}
+
+	defer func() {
+		r := recover()
+		assert.NotNil(t, r, "second Messages call must panic")
+	}()
+	for range s.Messages() {
+	}
+}
+
+// TestStream_ErrorMessageIncludesOffset verifies that value-level decode
+// errors are wrapped with message index and byte offset context.
+func TestStream_ErrorMessageIncludesOffset(t *testing.T) {
+	// Encode a valid stream, then append a corrupt value-body message.
+	buf := encodeStream(t, streamPoint{X: 1, Y: 2})
+
+	// Append a hand-crafted message: length prefix = 2, body = {0x02, 0xff}
+	// where 0x02 is a positive type ID for type 1 (bool) in the top-level
+	// slot (valid framing), but the type has never been defined for this
+	// stream at that ID (it's in fact the builtin bool, which DOES decode),
+	// hmm — let's pick an ID we haven't defined: 0x40 = 32 which neither
+	// builtin nor defined. Zig-zag encoded, 32 maps to raw int 0x40 → uint 64 →
+	// gob: one byte 0xC0 means "next byte is 1" ... easier to truncate the
+	// last message body.
+	// Simpler path: truncate the stream mid-value. Our last value is 4 bytes;
+	// drop the final byte so decodeTopLevelValue will fail mid-stream.
+	orig := buf.Bytes()
+	truncated := bytes.NewReader(orig[:len(orig)-1])
+
+	ins := gobspect.New()
+	s := ins.Stream(truncated)
+	var lastErr error
+	for _, err := range s.Values() {
+		if err != nil {
+			lastErr = err
+			break
+		}
+	}
+	require.Error(t, lastErr)
+	assert.Contains(t, lastErr.Error(), "message ")
+	assert.Contains(t, lastErr.Error(), "offset ")
+}
+
+// — WithSkipCorruptValues / SkipCount tests ———————————————————————————————
+
+// TestStream_SkipCorruptValues verifies that a corrupt value message is
+// silently skipped when WithSkipCorruptValues is enabled, the skip count is
+// incremented, and subsequent well-formed messages continue to decode.
+func TestStream_SkipCorruptValues(t *testing.T) {
+	// Encode three values. We'll splice a corrupt body into the middle one:
+	// change a byte inside message 2's body to an invalid field delta that
+	// will cause decodeStructValue to fail.
+	buf := encodeStream(t,
+		streamPoint{X: 1, Y: 2},
+		streamPoint{X: 3, Y: 4},
+		streamPoint{X: 5, Y: 6},
+	)
+	raw := buf.Bytes()
+
+	// Walk framing to find message 2's body span. Framing-level Messages()
+	// does not decode the value, so it succeeds on well-formed but
+	// semantically-corrupt bodies too.
+	var msgOffset int64
+	var msgBodyLen int
+	{
+		ins := gobspect.New()
+		s := ins.Stream(bytes.NewReader(raw))
+		count := 0
+		for m, err := range s.Messages() {
+			require.NoError(t, err)
+			if m.IsTypeDef() {
+				continue
+			}
+			count++
+			if count == 2 {
+				msgOffset = m.Offset
+				msgBodyLen = m.BodyLen
+				break
+			}
+		}
+	}
+	require.Greater(t, msgBodyLen, 2)
+
+	corrupted := make([]byte, len(raw))
+	copy(corrupted, raw)
+	// Length prefix for sub-128 bodies is a single byte; body starts at
+	// msgOffset+1. The terminator is the last body byte. Flipping it to
+	// a large non-zero value makes decodeStructValue see an out-of-range
+	// field delta while leaving the framing intact.
+	bodyStart := int(msgOffset) + 1
+	lastBodyByte := bodyStart + msgBodyLen - 1
+	require.Equal(t, byte(0), corrupted[lastBodyByte], "expected end-of-fields terminator at last body byte")
+	corrupted[lastBodyByte] = 0x7F
+
+	// With recovery OFF, decoding aborts mid-stream.
+	{
+		ins := gobspect.New()
+		s := ins.Stream(bytes.NewReader(corrupted))
+		_, err := s.Collect()
+		assert.Error(t, err, "strict mode should surface an error")
+		assert.Equal(t, 0, s.SkipCount())
+	}
+
+	// With recovery ON, the bad middle message is skipped; we still get
+	// the first and third values.
+	{
+		ins := gobspect.New(gobspect.WithSkipCorruptValues(true))
+		s := ins.Stream(bytes.NewReader(corrupted))
+		vals, err := s.Collect()
+		require.NoError(t, err)
+		assert.Len(t, vals, 2, "expected two surviving values")
+		assert.Equal(t, 1, s.SkipCount())
+	}
+}

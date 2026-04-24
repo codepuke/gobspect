@@ -34,10 +34,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/codepuke/gobspect"
+	"github.com/codepuke/gobspect/diff"
 	"github.com/codepuke/gobspect/query"
 	"github.com/codepuke/gobspect/sortval"
 	"github.com/codepuke/gobspect/tabular"
@@ -60,9 +62,11 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 
 	fileFlag := fs.String("file", "", "input file (default: stdin)")
 	fs.StringVar(fileFlag, "f", "", "input file (shorthand for -file)")
-	formatFlag := fs.String("format", "pretty", "output format: pretty, json, csv, or tsv")
-	schemaFlag := fs.Bool("schema", false, "print Go-style type schema and exit")
-	typesFlag := fs.Bool("types", false, "print type definitions as JSON and exit")
+	formatFlag := fs.String("format", "pretty", "output format: pretty, json, jsonl, csv, or tsv")
+	schemaFlag := fs.Bool("schema", false, "print type schema and exit")
+	schemaFormatFlag := fs.String("schema-format", "go", "schema output format: go or json")
+	typesFlag := fs.Bool("types", false, "print raw type definitions as JSON and exit")
+	statsFlag := fs.Bool("stats", false, "print stream-level statistics and exit")
 	indexFlag := fs.Int("index", -1, "print only the Nth value (0-based); -1 = all")
 	bytesFlag := fs.String("bytes", "hex", "byte rendering: hex, base64, or literal")
 	maxBytesFlag := fs.Int("max-bytes", 64, "truncation limit for byte slices (0 = no limit)")
@@ -76,10 +80,17 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 	heteroFlag := fs.String("hetero", "first", "heterogeneous-type handling for csv/tsv: first, reject, union, or partition")
 	limitFlag := fs.Int("limit", 0, "stop after N results (0 = no limit)")
 	offsetFlag := fs.Int("offset", 0, "skip the first N results")
-	sortFlag := fs.String("sort", "", "comma-separated column names to sort by")
-	sortDescFlag := fs.Bool("sort-desc", false, "reverse sort order for all keys")
+	sortFlag := fs.String("sort", "", "comma-separated column names to sort by (each may take a :asc or :desc suffix)")
+	sortDescFlag := fs.Bool("sort-desc", false, "default direction for sort keys without an explicit suffix")
 	sortFoldFlag := fs.Bool("sort-fold", false, "case-insensitive string comparison in sort")
 	sortDropFlag := fs.Bool("sort-drop-missing", false, "exclude rows missing all sort keys")
+	skipErrorsFlag := fs.Bool("skip-errors", false, "skip value messages that fail to decode and continue")
+	diffFlag := fs.String("diff", "", "path to another .gob file; emit a structural diff against the input, aligned by index")
+	countFlag := fs.Bool("count", false, "after filtering, print the number of matches and exit")
+	sumFlag := fs.String("sum", "", "path to a numeric field to sum over the matches and exit")
+	minFlag := fs.String("min", "", "path to a numeric field to take the minimum over and exit")
+	maxFlag := fs.String("max", "", "path to a numeric field to take the maximum over and exit")
+	avgFlag := fs.String("avg", "", "path to a numeric field to average over the matches and exit")
 
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -118,7 +129,7 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		return 2
 	}
 
-	warnings, err := validateFlags(*schemaFlag, *typesFlag, queryExpr, *formatFlag, *indexFlag, *limitFlag, *offsetFlag, *compactFlag, *rawFlag, *colorFlag, *noColorFlag, *sortFlag, *sortDescFlag, *sortFoldFlag, *sortDropFlag, *nullOnMissFlag, *timeFormatFlag)
+	warnings, err := validateFlags(*schemaFlag, *typesFlag, queryExpr, *formatFlag, *indexFlag, *limitFlag, *offsetFlag, *compactFlag, *rawFlag, *colorFlag, *noColorFlag, *sortFlag, *sortDescFlag, *sortFoldFlag, *sortDropFlag, *nullOnMissFlag, *timeFormatFlag, *schemaFormatFlag)
 	if err != nil {
 		fmt.Fprintf(stderr, "gq: %v\n", err)
 		return 2
@@ -170,6 +181,9 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 	if *timeFormatFlag != "" {
 		inspOpts = append(inspOpts, gobspect.WithTimeFormat(*timeFormatFlag))
 	}
+	if *skipErrorsFlag {
+		inspOpts = append(inspOpts, gobspect.WithSkipCorruptValues(true))
+	}
 	ins := gobspect.New(inspOpts...)
 
 	bytesFormat, ok := gobspect.ParseBytesFormat(*bytesFlag)
@@ -179,9 +193,9 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 	}
 
 	switch *formatFlag {
-	case "pretty", "json", "csv", "tsv":
+	case "pretty", "json", "jsonl", "csv", "tsv":
 	default:
-		fmt.Fprintf(stderr, "gq: unknown -format value %q; use pretty, json, csv, or tsv\n", *formatFlag)
+		fmt.Fprintf(stderr, "gq: unknown -format value %q; use pretty, json, jsonl, csv, or tsv\n", *formatFlag)
 		return 2
 	}
 
@@ -194,19 +208,89 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		}
 	}
 
+	if *diffFlag != "" {
+		other, err := os.Open(*diffFlag)
+		if err != nil {
+			fmt.Fprintf(stderr, "gq: opening diff target: %v\n", err)
+			return 1
+		}
+		defer other.Close()
+		var otherReader io.Reader = other
+		if strings.HasSuffix(*diffFlag, ".gz") {
+			gz, err := gzip.NewReader(other)
+			if err != nil {
+				fmt.Fprintf(stderr, "gq: opening diff target gzip stream: %v\n", err)
+				return 1
+			}
+			defer gz.Close()
+			otherReader = gz
+		}
+		leftVals, err := ins.Stream(r).Collect()
+		if err != nil {
+			fmt.Fprintf(stderr, "gq: decoding input: %v\n", err)
+			return 1
+		}
+		rightVals, err := ins.Stream(otherReader).Collect()
+		if err != nil {
+			fmt.Fprintf(stderr, "gq: decoding diff target: %v\n", err)
+			return 1
+		}
+		sd := diff.DiffStreams(leftVals, rightVals)
+		if *formatFlag == "json" || *formatFlag == "jsonl" {
+			out, jerr := diff.StreamToJSONIndent(sd, "", "  ")
+			if jerr != nil {
+				fmt.Fprintf(stderr, "gq: marshaling diff: %v\n", jerr)
+				return 1
+			}
+			stdout.Write(out)
+			fmt.Fprintln(stdout)
+		} else {
+			var diffOpts []diff.FormatOption
+			if useColor {
+				diffOpts = append(diffOpts, diff.WithColor(diff.ANSIColorScheme))
+			}
+			s := diff.FormatStream(sd, diffOpts...)
+			if s == "" {
+				// Still emit a visible marker so callers can tell "no change"
+				// from "program didn't run".
+				fmt.Fprintln(stdout, "(no differences)")
+			} else {
+				fmt.Fprint(stdout, s)
+			}
+		}
+		if diff.StreamHasChanges(sd) {
+			return 1 // diff-style exit code when there are changes
+		}
+		return 0
+	}
+
 	if *schemaFlag {
 		schema, err := ins.Stream(r).Schema()
 		if err != nil {
 			fmt.Fprintf(stderr, "gq: %v\n", err)
 			return 1
 		}
-		var s string
-		if useColor {
-			s = schema.Format(gobspect.SchemaWithColor(gobspect.ANSIColorScheme))
-		} else {
-			s = schema.String()
+		switch strings.ToLower(*schemaFormatFlag) {
+		case "", "go":
+			var s string
+			if useColor {
+				s = schema.Format(gobspect.SchemaWithColor(gobspect.ANSIColorScheme))
+			} else {
+				s = schema.String()
+			}
+			fmt.Fprintln(stdout, s)
+		case "json":
+			out, jerr := schema.JSONIndent("", "  ")
+			if jerr != nil {
+				fmt.Fprintf(stderr, "gq: marshaling schema: %v\n", jerr)
+				return 1
+			}
+			stdout.Write(out)
+			fmt.Fprintln(stdout)
+		default:
+			fmt.Fprintf(stderr, "gq: unknown -schema-format value %q; use go or json\n", *schemaFormatFlag)
+			return 2
 		}
-		fmt.Fprintln(stdout, s)
 		return 0
 	}
 
@@ -227,9 +311,56 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		return 0
 	}
 
+	if *statsFlag {
+		s := ins.Stream(r)
+		stats, err := s.Stats()
+		if err != nil {
+			fmt.Fprintf(stderr, "gq: %v\n", err)
+			return 1
+		}
+		if *formatFlag == "json" {
+			out, jerr := stats.JSONIndent("", "  ")
+			if jerr != nil {
+				fmt.Fprintf(stderr, "gq: marshaling stats: %v\n", jerr)
+				return 1
+			}
+			stdout.Write(out)
+			fmt.Fprintln(stdout)
+			return 0
+		}
+		if err := stats.Format(stdout); err != nil {
+			fmt.Fprintf(stderr, "gq: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
 	fmtOpts := []gobspect.FormatOption{
 		gobspect.WithBytesFormat(bytesFormat),
 		gobspect.WithMaxBytes(*maxBytesFlag),
+	}
+
+	// Aggregation mode: if -count, -sum, -min, -max, or -avg is set, drain
+	// the stream, run the query, reduce the matches, and print a single
+	// result. Aggregation is mutually exclusive with ordinary per-value
+	// output to keep the semantics unambiguous.
+	aggMode := ""
+	aggPath := ""
+	switch {
+	case *countFlag:
+		aggMode = "count"
+	case *sumFlag != "":
+		aggMode, aggPath = "sum", *sumFlag
+	case *minFlag != "":
+		aggMode, aggPath = "min", *minFlag
+	case *maxFlag != "":
+		aggMode, aggPath = "max", *maxFlag
+	case *avgFlag != "":
+		aggMode, aggPath = "avg", *avgFlag
+	}
+	if aggMode != "" {
+		stream := ins.Stream(r)
+		return runAggregate(aggMode, aggPath, stream, path, stdout, stderr)
 	}
 
 	stream := ins.Stream(r)
@@ -297,7 +428,14 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 			}
 		}
 
-		sorted := sortval.SortMatches(sortval.SeqOf(allResults), sortSpec)
+		var sorted []gobspect.Value
+		if tp != nil && heteroMode == tabular.HeterogeneousPartition {
+			// Per-partition sort: bucket results by struct type in arrival
+			// order, sort within each bucket, then concat.
+			sorted = sortPerPartition(allResults, sortSpec)
+		} else {
+			sorted = sortval.SortMatches(sortval.SeqOf(allResults), sortSpec)
+		}
 
 		for pos, result := range sorted {
 			if pos < *offsetFlag {
@@ -402,6 +540,18 @@ func printValue(v gobspect.Value, w io.Writer, format string, raw, compact, colo
 		_, err = fmt.Fprintln(w)
 		return err
 
+	case "jsonl":
+		// One compact JSON object per line, always — no multi-line indentation.
+		out, err := gobspect.ToJSON(v)
+		if err != nil {
+			return fmt.Errorf("encoding JSONL: %w", err)
+		}
+		if _, err := w.Write(out); err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(w)
+		return err
+
 	default: // "pretty"
 		opts := fmtOpts
 		if color {
@@ -430,9 +580,191 @@ func isTerminal(f *os.File) bool {
 	return term.IsTerminal(int(f.Fd()))
 }
 
-func validateFlags(schema, types bool, queryExpr string, format string, index, limit, offset int, compact, raw, color, noColor bool, sort string, sortDesc, sortFold, sortDrop bool, nullOnMiss bool, timeFormat string) (warnings []string, err error) {
+// runAggregate drains the stream, applies path to each top-level value,
+// collects matches, reduces them according to mode, and prints a single
+// result to stdout. mode is one of "count", "sum", "min", "max", "avg". For
+// numeric modes, aggPath is parsed as an extra path expression to apply to
+// each match before numeric extraction (empty = use the match itself).
+// Exit codes: 0 on success, 1 on decode error, 2 on bad numeric input.
+func runAggregate(mode string, aggPath string, stream *gobspect.Stream, matchPath query.Path, stdout, stderr io.Writer) int {
+	var numericPath query.Path
+	if aggPath != "" {
+		var err error
+		numericPath, err = query.Parse(query.NormalizeQuery(aggPath))
+		if err != nil {
+			fmt.Fprintf(stderr, "gq: invalid aggregation path %q: %v\n", aggPath, err)
+			return 2
+		}
+	}
+
+	// Numeric accumulators; we track integer and float separately so values
+	// that fit in int64/uint64 retain precision, falling back to float64
+	// when a float appears.
+	type numeric struct {
+		asFloat float64
+		count   int64
+		minInit bool
+		min     float64
+		max     float64
+		sawAny  bool
+	}
+	var acc numeric
+	var matchCount int64
+
+	pushNumeric := func(v gobspect.Value) error {
+		f, ok := toFloat(v)
+		if !ok {
+			return fmt.Errorf("non-numeric value for aggregation: %s", gobspect.ValueKind(v))
+		}
+		acc.asFloat += f
+		acc.count++
+		acc.sawAny = true
+		if !acc.minInit {
+			acc.min = f
+			acc.max = f
+			acc.minInit = true
+		} else {
+			if f < acc.min {
+				acc.min = f
+			}
+			if f > acc.max {
+				acc.max = f
+			}
+		}
+		return nil
+	}
+
+	for v, err := range stream.Values() {
+		if err != nil {
+			fmt.Fprintf(stderr, "gq: %v\n", err)
+			return 1
+		}
+		for result := range query.AllPathSeq(v, matchPath) {
+			matchCount++
+			if mode == "count" {
+				continue
+			}
+			target := result
+			if aggPath != "" {
+				// Apply the numeric path to the result; take only the first
+				// resolution so arithmetic stays well-defined.
+				r, ok := query.GetPath(result, numericPath)
+				if !ok {
+					continue
+				}
+				target = r
+			}
+			if err := pushNumeric(target); err != nil {
+				fmt.Fprintf(stderr, "gq: -%s %q: %v\n", mode, aggPath, err)
+				return 2
+			}
+		}
+	}
+
+	switch mode {
+	case "count":
+		fmt.Fprintln(stdout, matchCount)
+	case "sum":
+		fmt.Fprintln(stdout, formatFloat(acc.asFloat))
+	case "min":
+		if !acc.sawAny {
+			fmt.Fprintln(stdout, "null")
+			return 0
+		}
+		fmt.Fprintln(stdout, formatFloat(acc.min))
+	case "max":
+		if !acc.sawAny {
+			fmt.Fprintln(stdout, "null")
+			return 0
+		}
+		fmt.Fprintln(stdout, formatFloat(acc.max))
+	case "avg":
+		if acc.count == 0 {
+			fmt.Fprintln(stdout, "null")
+			return 0
+		}
+		fmt.Fprintln(stdout, formatFloat(acc.asFloat/float64(acc.count)))
+	}
+	return 0
+}
+
+// toFloat extracts a numeric value from v. Returns (0, false) for non-numeric
+// kinds (including strings and opaques).
+func toFloat(v gobspect.Value) (float64, bool) {
+	if iv, ok := v.(gobspect.InterfaceValue); ok {
+		v = iv.Value
+	}
+	switch n := v.(type) {
+	case gobspect.IntValue:
+		return float64(n.V), true
+	case gobspect.UintValue:
+		return float64(n.V), true
+	case gobspect.FloatValue:
+		return n.V, true
+	}
+	return 0, false
+}
+
+// formatFloat renders a numeric accumulator compactly. Integer-valued floats
+// drop the trailing ".0" so e.g. a count-like sum of 10 reads as "10" instead
+// of "10.000000".
+func formatFloat(f float64) string {
+	if f == float64(int64(f)) {
+		return fmt.Sprintf("%d", int64(f))
+	}
+	return strconv.FormatFloat(f, 'g', -1, 64)
+}
+
+// sortPerPartition buckets results by struct type (GobTypeID) in their first-
+// arrival order, sorts within each bucket, and returns the concatenation.
+// Values with GobTypeID == 0 (scalars, projections) form a single leading bucket.
+// This matches the tabular partition printer's notion of a "partition".
+func sortPerPartition(results []gobspect.Value, spec sortval.SortSpec) []gobspect.Value {
+	type bucket struct {
+		id   int
+		vals []gobspect.Value
+	}
+	order := []int{}           // bucket IDs in first-arrival order
+	byID := map[int]*bucket{}  // ID → bucket
+	for _, v := range results {
+		id := partitionID(v)
+		b, ok := byID[id]
+		if !ok {
+			b = &bucket{id: id}
+			byID[id] = b
+			order = append(order, id)
+		}
+		b.vals = append(b.vals, v)
+	}
+	out := make([]gobspect.Value, 0, len(results))
+	for _, id := range order {
+		sorted := sortval.SortMatches(sortval.SeqOf(byID[id].vals), spec)
+		out = append(out, sorted...)
+	}
+	return out
+}
+
+// partitionID returns the struct GobTypeID of v, unwrapping InterfaceValue.
+// Non-struct values and structs with no type ID return 0.
+func partitionID(v gobspect.Value) int {
+	if iv, ok := v.(gobspect.InterfaceValue); ok {
+		v = iv.Value
+	}
+	if sv, ok := v.(gobspect.StructValue); ok {
+		return sv.GobTypeID
+	}
+	return 0
+}
+
+func validateFlags(schema, types bool, queryExpr string, format string, index, limit, offset int, compact, raw, color, noColor bool, sort string, sortDesc, sortFold, sortDrop bool, nullOnMiss bool, timeFormat string, schemaFormat string) (warnings []string, err error) {
 	if color && noColor {
 		return nil, fmt.Errorf("cannot use -color and -no-color together")
+	}
+	if !schema && schemaFormat != "" && schemaFormat != "go" {
+		warnings = append(warnings, "-schema-format has no effect without -schema; ignoring")
+	}
+	if compact && format == "jsonl" {
+		warnings = append(warnings, "-compact has no effect with -format jsonl (jsonl is always compact); ignoring")
 	}
 	if schema && queryExpr != "" {
 		warnings = append(warnings, "query expression has no effect with -schema; ignoring")
@@ -458,7 +790,7 @@ func validateFlags(schema, types bool, queryExpr string, format string, index, l
 	if types && (limit > 0 || offset > 0) {
 		warnings = append(warnings, "-limit/-offset has no effect with -types; ignoring")
 	}
-	if compact && format != "json" {
+	if compact && format != "json" && format != "jsonl" {
 		warnings = append(warnings, fmt.Sprintf("-compact has no effect with -format %s; ignoring", format))
 	}
 	if raw && format != "pretty" {

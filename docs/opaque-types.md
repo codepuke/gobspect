@@ -109,6 +109,20 @@ The decimal value is `coefficient × 10^exponent`.
 
 Rendered as: reconstructed decimal string. Example: `123.45` (coefficient=12345, exponent=-2)
 
+### net/netip.Addr, netip.Prefix, netip.AddrPort (BinaryMarshalerT)
+
+Decoding delegates to the stdlib's own `UnmarshalBinary` on a zero-valued receiver; we store only the canonical `String()` result in `OpaqueValue.Decoded`, so no `netip.*` type ever enters the AST.
+
+| Type | Wire shape |
+|---|---|
+| `netip.Addr` | 4 bytes (IPv4), 16 bytes (IPv6), or 16 bytes + zone identifier |
+| `netip.Prefix` | `Addr` bytes followed by a 1-byte prefix length |
+| `netip.AddrPort` | `Addr` bytes followed by a 2-byte little-endian port |
+
+Rendered as: the canonical textual form — `"1.2.3.4"`, `"::1"`, `"10.0.0.0/24"`, `"1.2.3.4:80"`, `"[fe80::1]:8080"`.
+
+Registered under the keys `netip.Addr`, `netip.Prefix`, and `netip.AddrPort` respectively, matching the CommonType.Name gob emits when these types are encoded through an interface.
+
 ## Fallback for Unknown Types
 
 Unknown `GobEncoderT` and `BinaryMarshalerT` types are represented as `OpaqueValue` with `Decoded = nil`. The formatter renders them as:
