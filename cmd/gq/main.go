@@ -19,18 +19,21 @@
 //
 //	gq -f data.gob
 //	gq -f data.gob .Header.Timestamp
+//	gq -f data.gob.gz           # .gz files are decompressed automatically
 //	cat data.gob | gq .Items.*
 //	gq -schema -f data.gob
 //	gq -format json -f data.gob .Name
 package main
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"syscall"
 
 	"github.com/codepuke/gobspect"
@@ -140,6 +143,15 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		}
 		defer f.Close()
 		r = f
+		if strings.HasSuffix(inputPath, ".gz") {
+			gz, err := gzip.NewReader(f)
+			if err != nil {
+				fmt.Fprintf(stderr, "gq: opening gzip stream: %v\n", err)
+				return 1
+			}
+			defer gz.Close()
+			r = gz
+		}
 	}
 
 	var inspOpts []gobspect.Option

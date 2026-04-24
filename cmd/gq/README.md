@@ -137,7 +137,10 @@ gq -index 0 -f stream.gob
 # Export to TSV without headers
 gq -format tsv -no-headers -f records.gob .Orders.*.ID,Customer,Total > orders.tsv
 
-# Decompress on the fly (shell pipeline)
+# .gz files are decompressed automatically
+gq -schema -f data.gob.gz
+
+# For compressed stdin, decompress manually
 zcat data.gob.gz | gq -schema
 ```
 
