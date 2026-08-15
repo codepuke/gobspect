@@ -484,4 +484,3 @@ func TestDecodeInterface_MalformedZeroLengthValue(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorContains(t, err, "has zero-length value body")
 }
-

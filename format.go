@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -322,12 +321,13 @@ func fmtValueTo(w io.Writer, v Value, cfg *formatConfig, depth int) error {
 		}
 		return writeStr(w, cfg.color.Number.Apply(s))
 	case ComplexValue:
-		var s string
-		if math.Signbit(v.Imag) {
-			s = fmt.Sprintf("(%g%gi)", v.Real, v.Imag)
-		} else {
-			s = fmt.Sprintf("(%g+%gi)", v.Real, v.Imag)
+		// %g already carries a sign for -x and ±Inf; only prefix '+' when the
+		// rendered imaginary part has none, so +Inf doesn't become "++Inf".
+		im := fmt.Sprintf("%g", v.Imag)
+		if im[0] != '+' && im[0] != '-' {
+			im = "+" + im
 		}
+		s := fmt.Sprintf("(%g%si)", v.Real, im)
 		return writeStr(w, cfg.color.Number.Apply(s))
 	case StringValue:
 		return writeStr(w, cfg.color.String.Apply(fmt.Sprintf("%q", v.V)))
@@ -478,6 +478,11 @@ func fmtHex(b []byte, maxBytes int) string {
 func fmtOpaque(v OpaqueValue, cfg *formatConfig) string {
 	if v.Decoded != nil && !cfg.rawOpaques {
 		if s, ok := v.Decoded.(string); ok {
+			if s == "" {
+				// An empty decoded string (e.g. a TextMarshaler that emitted no
+				// bytes) would otherwise render as nothing at all.
+				return cfg.color.OpaqueValue.Apply(`""`)
+			}
 			return cfg.color.OpaqueValue.Apply(s)
 		}
 		return cfg.color.OpaqueValue.Apply(fmt.Sprint(v.Decoded))
@@ -528,7 +533,9 @@ func fmtStructTo(w io.Writer, v StructValue, cfg *formatConfig, depth int) error
 		}
 		rendered := fmtValue(f.Value, cfg, depth+1)
 		if cfg.redactKeys != nil && slices.Contains(cfg.redactKeys.Keys, f.Name) {
-			rendered = redactWithKeyCfg(rendered, *cfg.redactKeys)
+			// Measure the plain rendering: ANSI escape sequences in the colored
+			// form would inflate the redaction width.
+			rendered = redactWithKeyCfg(fmtPlainValue(f.Value, cfg, depth+1), *cfg.redactKeys)
 		}
 		if err := writeStr(w, rendered); err != nil {
 			return err
@@ -542,25 +549,55 @@ func fmtStructTo(w io.Writer, v StructValue, cfg *formatConfig, depth int) error
 
 // fmtMapTo renders a MapValue to w. Entries are sorted by their formatted key
 // for deterministic output. Short maps render inline; long maps render indented.
+//
+// Each entry's display key and value are rendered exactly once and the strings
+// reused for both the inline-fit probe and the final output. Re-rendering per
+// decision would make deeply nested values exponentially expensive to format.
+// Single-line renders contain no depth-dependent indentation (depth only
+// affects text following a newline), so strings rendered at depth+1 are valid
+// in the inline form too.
 func fmtMapTo(w io.Writer, v MapValue, cfg *formatConfig, depth int) error {
 	header := "map[" + v.KeyType + "]" + v.ElemType
 	if len(v.Entries) == 0 {
 		return writeStr(w, cfg.color.TypeHeader.Apply(header)+cfg.color.CloseBrace.Apply("{}"))
 	}
 
-	// Precompute the canonical (depth-0) plain-text key string for each entry.
-	// Plain (no-color) keys are used for sorting and redact matching so that
-	// ANSI escape codes do not affect those decisions.
-	// This avoids re-rendering every key on each comparison during sorting,
-	// reducing O(n log n) renders to O(n).
 	pcfg := plainConfig(cfg)
+	noColor := pcfg == cfg // true when cfg already has no color scheme
 	type keyedEntry struct {
-		canonKey string
-		entry    MapEntry
+		canonKey  string // plain depth-0 key: sort order and redact matching
+		dispKey   string // rendered key as displayed
+		dispVal   string // rendered value as displayed (post-redaction)
+		plainLen  int    // plain-text length of "key: value", inline candidates only
+		multiline bool
 	}
 	keyed := make([]keyedEntry, len(v.Entries))
 	for i, e := range v.Entries {
-		keyed[i] = keyedEntry{canonKey: fmtPlainValue(e.Key, cfg, 0), entry: e}
+		ke := keyedEntry{dispKey: fmtValue(e.Key, cfg, depth+1)}
+		keyMultiline := strings.ContainsRune(ke.dispKey, '\n')
+		if noColor && !keyMultiline {
+			ke.canonKey = ke.dispKey
+		} else {
+			ke.canonKey = fmtPlainValue(e.Key, cfg, 0)
+		}
+
+		redacted := cfg.redactKeys != nil && slices.Contains(cfg.redactKeys.Keys, ke.canonKey)
+		ke.dispVal = fmtValue(e.Value, cfg, depth+1)
+		plainVal := ke.dispVal
+		if !noColor {
+			plainVal = fmtValue(e.Value, pcfg, depth+1)
+		}
+		if redacted {
+			// Measure the plain rendering: ANSI escape sequences would
+			// inflate the redaction width.
+			ke.dispVal = redactWithKeyCfg(plainVal, *cfg.redactKeys)
+			plainVal = ke.dispVal
+		}
+		ke.multiline = keyMultiline || strings.ContainsRune(plainVal, '\n')
+		if !ke.multiline {
+			ke.plainLen = len(ke.canonKey) + len(": ") + len(plainVal)
+		}
+		keyed[i] = ke
 	}
 	if cfg.mapOrder != MapOrderInsertion {
 		slices.SortFunc(keyed, func(a, b keyedEntry) int {
@@ -568,51 +605,30 @@ func fmtMapTo(w io.Writer, v MapValue, cfg *formatConfig, depth int) error {
 		})
 	}
 
-	// Attempt inline rendering: use plain text for threshold check so ANSI
-	// codes don't inflate the measured length.
-	noColor := pcfg == cfg // true when cfg already has no color scheme
-	plainParts := make([]string, 0, len(keyed))
-	var colorParts []string
-	if !noColor {
-		colorParts = make([]string, 0, len(keyed))
-	}
+	// Inline when every entry is single-line and the plain-text total fits.
 	canInline := true
+	plainLen := len(header) + len("{}") + 2*(len(keyed)-1) // braces + ", " separators
 	for _, ke := range keyed {
-		plainK := ke.canonKey
-		plainVV := fmtValue(ke.entry.Value, pcfg, 0)
-		if cfg.redactKeys != nil && slices.Contains(cfg.redactKeys.Keys, plainK) {
-			plainVV = redactWithKeyCfg(plainVV, *cfg.redactKeys)
-		}
-		if strings.ContainsRune(plainK, '\n') || strings.ContainsRune(plainVV, '\n') {
+		if ke.multiline {
 			canInline = false
 			break
 		}
-		plainParts = append(plainParts, plainK+": "+plainVV)
-		if !noColor {
-			// Build the colored version only when a color scheme is active.
-			colorK := fmtValue(ke.entry.Key, cfg, 0)
-			colorVV := fmtValue(ke.entry.Value, cfg, 0)
-			if cfg.redactKeys != nil && slices.Contains(cfg.redactKeys.Keys, plainK) {
-				colorVV = redactWithKeyCfg(plainVV, *cfg.redactKeys)
-			}
-			colorParts = append(colorParts, colorK+": "+colorVV)
-		}
+		plainLen += ke.plainLen
 	}
 	if canInline {
-		plainInline := header + "{" + strings.Join(plainParts, ", ") + "}"
 		width := cfg.inlineWidth
 		if width == 0 {
 			width = 72
 		}
-		if len(plainInline) <= width {
-			if noColor {
-				return writeStr(w, plainInline)
+		if plainLen <= width {
+			parts := make([]string, len(keyed))
+			for i, ke := range keyed {
+				parts[i] = ke.dispKey + ": " + ke.dispVal
 			}
-			colorInline := cfg.color.TypeHeader.Apply(header) +
-				cfg.color.CloseBrace.Apply("{") +
-				strings.Join(colorParts, ", ") +
-				cfg.color.CloseBrace.Apply("}")
-			return writeStr(w, colorInline)
+			return writeStr(w, cfg.color.TypeHeader.Apply(header)+
+				cfg.color.CloseBrace.Apply("{")+
+				strings.Join(parts, ", ")+
+				cfg.color.CloseBrace.Apply("}"))
 		}
 	}
 
@@ -623,26 +639,7 @@ func fmtMapTo(w io.Writer, v MapValue, cfg *formatConfig, depth int) error {
 		return err
 	}
 	for _, ke := range keyed {
-		if err := writeStr(w, fieldIndent); err != nil {
-			return err
-		}
-		// Render the display key at depth+1 for correct indentation of any
-		// nested struct/map keys; use the precomputed depth-0 canon key only
-		// for redact matching.
-		if err := writeStr(w, fmtValue(ke.entry.Key, cfg, depth+1)); err != nil {
-			return err
-		}
-		if err := writeStr(w, ": "); err != nil {
-			return err
-		}
-		rendered := fmtValue(ke.entry.Value, cfg, depth+1)
-		if cfg.redactKeys != nil && slices.Contains(cfg.redactKeys.Keys, ke.canonKey) {
-			rendered = redactWithKeyCfg(rendered, *cfg.redactKeys)
-		}
-		if err := writeStr(w, rendered); err != nil {
-			return err
-		}
-		if err := writeStr(w, "\n"); err != nil {
+		if err := writeStr(w, fieldIndent+ke.dispKey+": "+ke.dispVal+"\n"); err != nil {
 			return err
 		}
 	}
@@ -651,108 +648,57 @@ func fmtMapTo(w io.Writer, v MapValue, cfg *formatConfig, depth int) error {
 
 // fmtSliceTo renders a SliceValue to w inline when short, indented when long.
 func fmtSliceTo(w io.Writer, v SliceValue, cfg *formatConfig, depth int) error {
-	header := "[]" + v.ElemType
-	if len(v.Elems) == 0 {
-		return writeStr(w, cfg.color.TypeHeader.Apply(header)+cfg.color.CloseBrace.Apply("{}"))
-	}
-
-	pcfg := plainConfig(cfg)
-	noColor := pcfg == cfg
-	plainParts := make([]string, 0, len(v.Elems))
-	var colorParts []string
-	if !noColor {
-		colorParts = make([]string, 0, len(v.Elems))
-	}
-	canInline := true
-	for _, e := range v.Elems {
-		plain := fmtValue(e, pcfg, 0)
-		if strings.ContainsRune(plain, '\n') {
-			canInline = false
-			break
-		}
-		plainParts = append(plainParts, plain)
-		if !noColor {
-			colorParts = append(colorParts, fmtValue(e, cfg, 0))
-		}
-	}
-	if canInline {
-		plainInline := header + "{" + strings.Join(plainParts, ", ") + "}"
-		width := cfg.inlineWidth
-		if width == 0 {
-			width = 72
-		}
-		if len(plainInline) <= width {
-			if noColor {
-				return writeStr(w, plainInline)
-			}
-			colorInline := cfg.color.TypeHeader.Apply(header) +
-				cfg.color.CloseBrace.Apply("{") +
-				strings.Join(colorParts, ", ") +
-				cfg.color.CloseBrace.Apply("}")
-			return writeStr(w, colorInline)
-		}
-	}
-
-	prefix := strings.Repeat(cfg.indent, depth)
-	fieldIndent := strings.Repeat(cfg.indent, depth+1)
-	if err := writeStr(w, cfg.color.TypeHeader.Apply(header)+cfg.color.CloseBrace.Apply("{")+"\n"); err != nil {
-		return err
-	}
-	for _, e := range v.Elems {
-		if err := writeStr(w, fieldIndent); err != nil {
-			return err
-		}
-		if err := writeStr(w, fmtValue(e, cfg, depth+1)); err != nil {
-			return err
-		}
-		if err := writeStr(w, "\n"); err != nil {
-			return err
-		}
-	}
-	return writeStr(w, prefix+cfg.color.CloseBrace.Apply("}"))
+	return fmtListTo(w, "[]"+v.ElemType, v.Elems, cfg, depth)
 }
 
 // fmtArrayTo renders an ArrayValue to w inline when short, indented when long.
 func fmtArrayTo(w io.Writer, v ArrayValue, cfg *formatConfig, depth int) error {
-	header := fmt.Sprintf("[%d]%s", v.Len, v.ElemType)
-	if len(v.Elems) == 0 {
+	return fmtListTo(w, fmt.Sprintf("[%d]%s", v.Len, v.ElemType), v.Elems, cfg, depth)
+}
+
+// fmtListTo renders slice/array elements inline when every element is
+// single-line and the plain-text total fits the inline width, indented
+// otherwise.
+//
+// Each element is rendered exactly once and the string reused for both the
+// inline-fit probe and the final output. Re-rendering per decision would make
+// deeply nested values exponentially expensive to format. Single-line renders
+// contain no depth-dependent indentation (depth only affects text following a
+// newline), so strings rendered at depth+1 are valid in the inline form too.
+func fmtListTo(w io.Writer, header string, elems []Value, cfg *formatConfig, depth int) error {
+	if len(elems) == 0 {
 		return writeStr(w, cfg.color.TypeHeader.Apply(header)+cfg.color.CloseBrace.Apply("{}"))
 	}
 
 	pcfg := plainConfig(cfg)
 	noColor := pcfg == cfg
-	plainParts := make([]string, 0, len(v.Elems))
-	var colorParts []string
-	if !noColor {
-		colorParts = make([]string, 0, len(v.Elems))
-	}
+	parts := make([]string, len(elems))
 	canInline := true
-	for _, e := range v.Elems {
-		plain := fmtValue(e, pcfg, 0)
-		if strings.ContainsRune(plain, '\n') {
-			canInline = false
-			break
-		}
-		plainParts = append(plainParts, plain)
-		if !noColor {
-			colorParts = append(colorParts, fmtValue(e, cfg, 0))
+	plainLen := len(header) + len("{}") + 2*(len(elems)-1) // braces + ", " separators
+	for i, e := range elems {
+		parts[i] = fmtValue(e, cfg, depth+1)
+		if canInline {
+			// ANSI escapes contain no newline, so the display string is
+			// multi-line exactly when the plain one is.
+			if strings.ContainsRune(parts[i], '\n') {
+				canInline = false
+			} else if noColor {
+				plainLen += len(parts[i])
+			} else {
+				plainLen += len(fmtValue(e, pcfg, depth+1))
+			}
 		}
 	}
 	if canInline {
-		plainInline := header + "{" + strings.Join(plainParts, ", ") + "}"
 		width := cfg.inlineWidth
 		if width == 0 {
 			width = 72
 		}
-		if len(plainInline) <= width {
-			if noColor {
-				return writeStr(w, plainInline)
-			}
-			colorInline := cfg.color.TypeHeader.Apply(header) +
-				cfg.color.CloseBrace.Apply("{") +
-				strings.Join(colorParts, ", ") +
-				cfg.color.CloseBrace.Apply("}")
-			return writeStr(w, colorInline)
+		if plainLen <= width {
+			return writeStr(w, cfg.color.TypeHeader.Apply(header)+
+				cfg.color.CloseBrace.Apply("{")+
+				strings.Join(parts, ", ")+
+				cfg.color.CloseBrace.Apply("}"))
 		}
 	}
 
@@ -761,14 +707,8 @@ func fmtArrayTo(w io.Writer, v ArrayValue, cfg *formatConfig, depth int) error {
 	if err := writeStr(w, cfg.color.TypeHeader.Apply(header)+cfg.color.CloseBrace.Apply("{")+"\n"); err != nil {
 		return err
 	}
-	for _, e := range v.Elems {
-		if err := writeStr(w, fieldIndent); err != nil {
-			return err
-		}
-		if err := writeStr(w, fmtValue(e, cfg, depth+1)); err != nil {
-			return err
-		}
-		if err := writeStr(w, "\n"); err != nil {
+	for _, part := range parts {
+		if err := writeStr(w, fieldIndent+part+"\n"); err != nil {
 			return err
 		}
 	}

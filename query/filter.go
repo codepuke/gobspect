@@ -2,6 +2,7 @@ package query
 
 import (
 	"path"
+	"strings"
 
 	"github.com/codepuke/gobspect"
 )
@@ -53,8 +54,8 @@ func matchesFilter(v gobspect.Value, seg segment) bool {
 			return !anyElemMatchesGlob(col.Elems, seg.filterPattern)
 		case gobspect.MapValue:
 			for _, e := range col.Entries {
-				if sv, ok := e.Key.(gobspect.StringValue); ok {
-					if matched, err := path.Match(seg.filterPattern, sv.V); err == nil && matched {
+				if k, ok := keyString(e.Key); ok {
+					if matched, err := path.Match(seg.filterPattern, k); err == nil && matched {
 						return false
 					}
 				}
@@ -78,8 +79,8 @@ func matchesFilter(v gobspect.Value, seg segment) bool {
 			return anyElemMatchesGlob(col.Elems, seg.filterPattern)
 		case gobspect.MapValue:
 			for _, e := range col.Entries {
-				if sv, ok := e.Key.(gobspect.StringValue); ok {
-					if matched, err := path.Match(seg.filterPattern, sv.V); err == nil && matched {
+				if k, ok := keyString(e.Key); ok {
+					if matched, err := path.Match(seg.filterPattern, k); err == nil && matched {
 						return true
 					}
 				}
@@ -136,9 +137,25 @@ func numericCmp(v gobspect.Value, op filterOp, seg segment) bool {
 		if seg.filterIntOK {
 			return intCmp(n.V, op, seg.filterIntVal)
 		}
+		if seg.filterUintOK {
+			// Pattern parsed as uint64 but not int64: target > MaxInt64,
+			// so any int64 value is strictly less than it.
+			return cmpBeyond(op, true)
+		}
+		if valueLess, ok := integerPatternBeyond(seg.filterPattern); ok {
+			return cmpBeyond(op, valueLess)
+		}
 	case gobspect.UintValue:
 		if seg.filterUintOK {
 			return uintCmp(n.V, op, seg.filterUintVal)
+		}
+		if seg.filterIntOK {
+			// Pattern parsed as int64 but not uint64: target < 0,
+			// so any uint64 value is strictly greater than it.
+			return cmpBeyond(op, false)
+		}
+		if valueLess, ok := integerPatternBeyond(seg.filterPattern); ok {
+			return cmpBeyond(op, valueLess)
 		}
 	}
 
@@ -202,6 +219,29 @@ func uintCmp(a uint64, op filterOp, b uint64) bool {
 	return false
 }
 
+// cmpBeyond resolves a comparison whose target lies entirely outside the
+// field value's range: valueLess reports whether the value is necessarily
+// less than the target. Equality is impossible either way.
+func cmpBeyond(op filterOp, valueLess bool) bool {
+	if valueLess {
+		return op == filterOpNumLT || op == filterOpNumLTE
+	}
+	return op == filterOpNumGT || op == filterOpNumGTE
+}
+
+// integerPatternBeyond classifies a filter pattern that has integer syntax
+// but parsed as neither int64 nor uint64 — it lies beyond both ranges.
+// valueLess reports whether any in-range integer value is necessarily less
+// than the target (positive overflow) rather than greater (negative
+// overflow). ok is false for float-syntax patterns, which use the float64
+// comparison path instead.
+func integerPatternBeyond(pattern string) (valueLess, ok bool) {
+	if pattern == "" || strings.ContainsAny(pattern, ".eE") {
+		return false, false
+	}
+	return pattern[0] != '-', true
+}
+
 // anyElemMatchesGlob returns true if any element in elems is a StringValue
 // (after unwrapping InterfaceValue) whose V matches the glob pattern.
 func anyElemMatchesGlob(elems []gobspect.Value, pattern string) bool {
@@ -228,7 +268,7 @@ func fieldValue(v gobspect.Value, name string) gobspect.Value {
 		}
 	case gobspect.MapValue:
 		for _, e := range n.Entries {
-			if sv, ok := e.Key.(gobspect.StringValue); ok && sv.V == name {
+			if k, ok := keyString(e.Key); ok && k == name {
 				return e.Value
 			}
 		}
@@ -249,7 +289,7 @@ func fieldPresent(v gobspect.Value, name string) bool {
 		}
 	case gobspect.MapValue:
 		for _, e := range n.Entries {
-			if sv, ok := e.Key.(gobspect.StringValue); ok && sv.V == name {
+			if k, ok := keyString(e.Key); ok && k == name {
 				return true
 			}
 		}
@@ -273,10 +313,10 @@ func fieldAsString(v gobspect.Value, name string) (string, bool) {
 		}
 	case gobspect.MapValue:
 		for _, e := range n.Entries {
-			if sv, ok := e.Key.(gobspect.StringValue); ok && sv.V == name {
+			if k, ok := keyString(e.Key); ok && k == name {
 				inner := unwrapInterface(e.Value)
-				if sv2, ok := inner.(gobspect.StringValue); ok {
-					return sv2.V, true
+				if sv, ok := inner.(gobspect.StringValue); ok {
+					return sv.V, true
 				}
 				return "", false
 			}

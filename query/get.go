@@ -8,16 +8,20 @@ import (
 	"github.com/codepuke/gobspect"
 )
 
-// GetPath resolves p against root and returns the matching value.
-// Returns (root, true) for an empty path.
-// Returns (nil, false) if the path does not resolve.
+// GetPath resolves p against root and returns the first matching value in
+// document order — the same value AllPath would return first. Evaluation is
+// lazy and stops at the first match.
+// Returns (root, true) for an empty path (unwrapped of any interface wrapper).
+// Returns (nil, false) if the path matches nothing.
 func GetPath(root gobspect.Value, p Path) (gobspect.Value, bool) {
-	v, ok, _ := walkGetPath(root, p.segs)
-	return v, ok
+	for v := range AllPathSeq(root, p) {
+		return v, true
+	}
+	return nil, false
 }
 
 // Get resolves expr against root. Panics if expr is syntactically invalid.
-// Returns (nil, false) if the path does not resolve.
+// Returns (nil, false) if the path matches nothing.
 func Get(root gobspect.Value, expr string) (gobspect.Value, bool) {
 	p, err := Parse(expr)
 	if err != nil {
@@ -34,19 +38,23 @@ func MustGet(root gobspect.Value, expr string) gobspect.Value {
 	if err != nil {
 		panic(fmt.Sprintf("query.MustGet: invalid path expression %q: %v", expr, err))
 	}
-	v, ok, failIdx := walkGetPath(root, p.segs)
-	if !ok {
-		failSeg := "?"
-		if failIdx >= 0 && failIdx < len(p.segs) {
-			failSeg = segString(p.segs[failIdx])
-		}
-		panic(fmt.Sprintf("query.MustGet: path %q did not resolve at segment %q", expr, failSeg))
+	if v, ok := GetPath(root, p); ok {
+		return v
 	}
-	return v
+	// Re-walk eagerly, purely to identify the segment to blame in the message.
+	_, _, failIdx := walkGetPath(root, p.segs)
+	failSeg := "?"
+	if failIdx >= 0 && failIdx < len(p.segs) {
+		failSeg = segString(p.segs[failIdx])
+	}
+	panic(fmt.Sprintf("query.MustGet: path %q did not resolve at segment %q", expr, failSeg))
 }
 
-// walkGetPath resolves segs against root and returns the matched value, success,
-// and the index of the first segment that failed to resolve (-1 if all resolved).
+// walkGetPath resolves segs against root eagerly, committing to the first
+// element at each fan-out segment. It is kept only as a diagnostic for
+// [MustGet]'s panic message: it returns the matched value, success, and the
+// index of the first segment that failed to resolve (-1 if all resolved).
+// Path resolution itself goes through [AllPathSeq].
 func walkGetPath(root gobspect.Value, segs []segment) (gobspect.Value, bool, int) {
 	cur := root
 	for i, seg := range segs {
@@ -149,6 +157,16 @@ func unwrapInterface(v gobspect.Value) gobspect.Value {
 	return v
 }
 
+// keyString extracts the string form of a map key, unwrapping a single
+// InterfaceValue wrapper first (interface-keyed maps such as map[any]T
+// deliver their keys wrapped). Returns ("", false) for non-string keys.
+func keyString(k gobspect.Value) (string, bool) {
+	if sv, ok := unwrapInterface(k).(gobspect.StringValue); ok {
+		return sv.V, true
+	}
+	return "", false
+}
+
 // stepField navigates a segField segment: looks up name in a StructValue's
 // Fields slice or in a MapValue whose keys are StringValues.
 func stepField(v gobspect.Value, name string) (gobspect.Value, bool) {
@@ -161,7 +179,7 @@ func stepField(v gobspect.Value, name string) (gobspect.Value, bool) {
 		}
 	case gobspect.MapValue:
 		for _, e := range n.Entries {
-			if sv, ok := e.Key.(gobspect.StringValue); ok && sv.V == name {
+			if k, ok := keyString(e.Key); ok && k == name {
 				return e.Value, true
 			}
 		}

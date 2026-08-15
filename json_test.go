@@ -173,8 +173,8 @@ func TestToJSON_Kinds(t *testing.T) {
 			value: gobspect.MapValue{
 				TypeName:  "M",
 				GobTypeID: 5,
-				KeyType:  "string",
-				ElemType: "int",
+				KeyType:   "string",
+				ElemType:  "int",
 				Entries: []gobspect.MapEntry{
 					{Key: gobspect.StringValue{V: "a"}, Value: gobspect.IntValue{V: 1}},
 				},
@@ -196,8 +196,8 @@ func TestToJSON_Kinds(t *testing.T) {
 			value: gobspect.SliceValue{
 				TypeName:  "S",
 				GobTypeID: 3,
-				ElemType: "int",
-				Elems:    []gobspect.Value{gobspect.IntValue{V: 10}, gobspect.IntValue{V: 20}},
+				ElemType:  "int",
+				Elems:     []gobspect.Value{gobspect.IntValue{V: 10}, gobspect.IntValue{V: 20}},
 			},
 			wantKind: "slice",
 			checkMore: func(t *testing.T, m map[string]any) {
@@ -211,9 +211,9 @@ func TestToJSON_Kinds(t *testing.T) {
 			value: gobspect.ArrayValue{
 				TypeName:  "A",
 				GobTypeID: 4,
-				ElemType: "int",
-				Len:      3,
-				Elems:    []gobspect.Value{gobspect.IntValue{V: 1}, gobspect.IntValue{V: 2}, gobspect.IntValue{V: 3}},
+				ElemType:  "int",
+				Len:       3,
+				Elems:     []gobspect.Value{gobspect.IntValue{V: 1}, gobspect.IntValue{V: 2}, gobspect.IntValue{V: 3}},
 			},
 			wantKind: "array",
 			checkMore: func(t *testing.T, m map[string]any) {

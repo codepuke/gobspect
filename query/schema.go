@@ -29,6 +29,7 @@ func SchemaAt(schema *gobspect.Schema, rootTypeExpr string, p Path) (string, err
 	}
 
 	candidates := []string{rootTypeExpr}
+	inPredicate := false // true while consuming filters that follow a wildcard descend
 	for _, seg := range p.segs {
 		if seg.kind == segDescend {
 			next := descendResolve(schema, candidates, seg.name)
@@ -36,8 +37,21 @@ func SchemaAt(schema *gobspect.Schema, rootTypeExpr string, p Path) (string, err
 				return "", fmt.Errorf("schema lookup: recursive descent %q produced no reachable types", segString(seg))
 			}
 			candidates = next
+			inPredicate = seg.name == ""
 			continue
 		}
+		if inPredicate && seg.kind == segFilter {
+			// The runtime applies filters after a wildcard descend to each
+			// visited node as a predicate, so the type is unchanged; narrow
+			// the candidate set to types that could satisfy the filter.
+			next := narrowByFilter(schema, candidates, seg)
+			if len(next) == 0 {
+				return "", fmt.Errorf("schema lookup: no reachable type can match filter %s after recursive descent", segString(seg))
+			}
+			candidates = next
+			continue
+		}
+		inPredicate = false
 		next := make([]string, 0, len(candidates))
 		seen := make(map[string]struct{}, len(candidates))
 		for _, c := range candidates {
@@ -66,8 +80,8 @@ func SchemaAt(schema *gobspect.Schema, rootTypeExpr string, p Path) (string, err
 // descendResolve executes one segDescend segment over the candidate set.
 // With a non-empty name, it returns the union of field types named `name`
 // reachable from any candidate. With an empty name (wildcard descent, for
-// "..[filter]"), it returns the union of collection-element types reachable
-// from any candidate, to be further filtered by the following segment.
+// "..[filter]"), it returns every reachable type — the runtime tests every
+// node in the subtree — to be narrowed by the following filter segment(s).
 func descendResolve(schema *gobspect.Schema, candidates []string, name string) []string {
 	reachable := expandDescent(schema, candidates)
 	seen := make(map[string]struct{})
@@ -84,13 +98,8 @@ func descendResolve(schema *gobspect.Schema, candidates []string, name string) [
 	}
 
 	if name == "" {
-		// Wildcard descent: every reachable collection contributes its element type.
-		for _, expr := range reachable {
-			if elem, err := extractElemType(schema, expr); err == nil {
-				add(elem)
-			}
-		}
-		return dedupeSortedStrings(out)
+		// Wildcard descent: every reachable type is a candidate node type.
+		return dedupeSortedStrings(reachable)
 	}
 
 	for _, expr := range reachable {
@@ -122,6 +131,58 @@ func descendResolve(schema *gobspect.Schema, candidates []string, name string) [
 		}
 	}
 	return dedupeSortedStrings(out)
+}
+
+// narrowByFilter keeps the candidate types that could satisfy filter seg when
+// it is applied as a per-node predicate (the position directly after a
+// wildcard descend). The type expression itself is unchanged by a predicate.
+func narrowByFilter(schema *gobspect.Schema, candidates []string, seg segment) []string {
+	var out []string
+	for _, c := range candidates {
+		if typeCouldMatchFilter(schema, c, seg) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// typeCouldMatchFilter reports whether a value of the given type could pass
+// filter seg. A filter naming a field can match named struct types declaring
+// that field and string-keyed maps (any runtime key could equal the name).
+// [F!!] can match anything, since every node lacking the field passes. An OR
+// group can match if any alternative can.
+func typeCouldMatchFilter(schema *gobspect.Schema, expr string, seg segment) bool {
+	if len(seg.orAlts) > 0 {
+		for _, alt := range seg.orAlts {
+			if typeCouldMatchFilter(schema, expr, alt) {
+				return true
+			}
+		}
+		return false
+	}
+	if seg.filterOp == filterOpNotExist {
+		return true
+	}
+	if decl, ok := schema.TypeByName(expr); ok {
+		switch decl.Kind {
+		case gobspect.KindStruct:
+			for _, f := range decl.Fields {
+				if f.Name == seg.name {
+					return true
+				}
+			}
+			return false
+		case gobspect.KindMap:
+			_, keyType, err := mapValueAndKeyType(decl.TargetType)
+			return err == nil && keyType == "string"
+		}
+		return false
+	}
+	if strings.HasPrefix(expr, "map[") {
+		_, keyType, err := mapValueAndKeyType(expr)
+		return err == nil && keyType == "string"
+	}
+	return false
 }
 
 // schemaAtSingle is the original linear resolver for paths with no recursive

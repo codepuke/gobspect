@@ -18,8 +18,8 @@ import (
 // TestParseBytesFormat exercises each accepted literal plus the fallback.
 func TestParseBytesFormat(t *testing.T) {
 	tests := []struct {
-		in    string
-		want  gobspect.BytesFormat
+		in     string
+		want   gobspect.BytesFormat
 		wantOK bool
 	}{
 		{"hex", gobspect.BytesHex, true},

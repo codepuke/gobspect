@@ -125,8 +125,8 @@ func (BoolValue) TypeID() int      { return 0 }
 func (StringValue) TypeID() int    { return 0 }
 func (BytesValue) TypeID() int     { return 0 }
 func (NilValue) TypeID() int       { return 0 }
-func (InterfaceValue) TypeID() int  { return 0 }
-func (v OpaqueValue) TypeID() int   { return v.GobTypeID }
+func (InterfaceValue) TypeID() int { return 0 }
+func (v OpaqueValue) TypeID() int  { return v.GobTypeID }
 
 // ValueKind returns a short lowercase string identifying the concrete type of v:
 // "struct", "map", "slice", "array", "int", "uint", "float", "complex",

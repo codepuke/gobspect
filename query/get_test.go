@@ -991,11 +991,83 @@ func TestGetNestedProjectionThreeLevels(t *testing.T) {
 	assert.Equal(t, makeString("10001"), sv.Fields[1].Value)
 }
 
+// TestGetBareSlashIsLiteralName locks in the documented semantics of "/"
+// outside a projection: a bare token containing "/" is a literal field/key
+// name (string map keys may contain slashes), never nested navigation.
+func TestGetBareSlashIsLiteralName(t *testing.T) {
+	m := gobspect.MapValue{Entries: []gobspect.MapEntry{
+		{Key: makeString("path/to"), Value: makeInt(7)},
+	}}
+	v, ok := Get(m, "path/to")
+	require.True(t, ok, "a map key containing '/' must be reachable as a literal name")
+	assert.Equal(t, makeInt(7), v)
+
+	root := makeStruct("Item",
+		field_("Address", makeStruct("Address",
+			field_("Zip", makeString("97201")),
+		)),
+	)
+	_, ok = Get(root, "Address/Zip")
+	assert.False(t, ok, "bare 'Address/Zip' is a literal name, not navigation; use 'Address.Zip'")
+	v, ok = Get(root, "Address.Zip")
+	require.True(t, ok)
+	assert.Equal(t, makeString("97201"), v)
+}
+
 // TestSegStringProjectionCase verifies segString output for a segProject segment.
 func TestSegStringProjectionCase(t *testing.T) {
 	s := segment{kind: segProject, projectFields: []string{"A", "B", "C"}}
 	result := segString(s)
 	assert.Equal(t, "A,B,C", result)
+}
+
+// — Get/All unified semantics —————————————————————————————————————————————————
+
+// TestGetFirstMatchAcrossElements verifies Get returns the first full match in
+// document order: a fan-out segment (* or a filter) must not commit to the
+// first element when the rest of the path fails on it. Realistic with gob,
+// which omits zero-valued fields.
+func TestGetFirstMatchAcrossElements(t *testing.T) {
+	root := makeStruct("Root",
+		field_("Items", makeSlice(
+			makeStruct("Item", field_("Price", makeInt(5))), // no Name
+			makeStruct("Item", field_("Price", makeInt(7)), field_("Name", makeString("x"))),
+		)),
+	)
+
+	v, ok := Get(root, "Items.*.Name")
+	require.True(t, ok, "Get must find the first element that has Name")
+	assert.Equal(t, makeString("x"), v)
+
+	v, ok = Get(root, "Items[Price>0].Name")
+	require.True(t, ok, "filter survivors without Name must be skipped")
+	assert.Equal(t, makeString("x"), v)
+
+	// Agreement with All: Get is All's first result.
+	all := All(root, "Items.*.Name")
+	require.NotEmpty(t, all)
+	assert.Equal(t, all[0], v)
+}
+
+// TestGetUnwrapsTerminalInterfaceValue verifies Get and All agree on the shape
+// of results that land on an interface-wrapped node: both return the inner
+// concrete value.
+func TestGetUnwrapsTerminalInterfaceValue(t *testing.T) {
+	inner := makeStruct("Inner", field_("X", makeInt(1)))
+	root := makeStruct("Root", field_("Child", wrapped("Inner", inner)))
+
+	gv, ok := Get(root, "Child")
+	require.True(t, ok)
+	assert.Equal(t, gobspect.Value(inner), gv, "Get returns the unwrapped value")
+
+	av := All(root, "Child")
+	require.Len(t, av, 1)
+	assert.Equal(t, gv, av[0], "Get and All agree")
+
+	// Empty path on a wrapped root unwraps too.
+	gv, ok = Get(wrapped("Inner", inner), "")
+	require.True(t, ok)
+	assert.Equal(t, gobspect.Value(inner), gv)
 }
 
 // — helpers ——————————————————————————————————————————————————————————————————

@@ -33,6 +33,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -53,12 +54,17 @@ func main() {
 func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("gq", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: gq [flags] [query]")
-		fmt.Fprintln(stderr, "")
-		fmt.Fprintln(stderr, "flags:")
+	printUsage := func(w io.Writer) {
+		fmt.Fprintln(w, "usage: gq [flags] [query]")
+		fmt.Fprintln(w, "")
+		fmt.Fprintln(w, "flags:")
+		fs.SetOutput(w)
 		fs.PrintDefaults()
+		fs.SetOutput(stderr)
 	}
+	// Usage is printed manually after Parse so that explicit -h/-help goes to
+	// stdout with exit 0, while parse errors go to stderr with exit 2.
+	fs.Usage = func() {}
 
 	fileFlag := fs.String("file", "", "input file (default: stdin)")
 	fs.StringVar(fileFlag, "f", "", "input file (shorthand for -file)")
@@ -91,9 +97,24 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 	minFlag := fs.String("min", "", "path to a numeric field to take the minimum over and exit")
 	maxFlag := fs.String("max", "", "path to a numeric field to take the maximum over and exit")
 	avgFlag := fs.String("avg", "", "path to a numeric field to average over the matches and exit")
+	nonfiniteFlag := fs.String("nonfinite", "strings", "JSON rendering of NaN/±Inf floats: strings or null")
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			printUsage(stdout)
+			return 0
+		}
+		printUsage(stderr)
 		return 2
+	}
+
+	// Record which flags were set explicitly: conflict validation must not
+	// mistake a default value for a user choice.
+	setFlags := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
+	if setFlags["f"] {
+		setFlags["file"] = true
+		delete(setFlags, "f")
 	}
 
 	args = fs.Args()
@@ -107,7 +128,7 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		queryExpr = args[0]
 	default:
 		fmt.Fprintln(stderr, "gq: too many arguments")
-		fs.Usage()
+		printUsage(stderr)
 		return 2
 	}
 
@@ -128,14 +149,18 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		fmt.Fprintln(stderr, "gq: -offset must be non-negative")
 		return 2
 	}
-
-	warnings, err := validateFlags(*schemaFlag, *typesFlag, queryExpr, *formatFlag, *indexFlag, *limitFlag, *offsetFlag, *compactFlag, *rawFlag, *colorFlag, *noColorFlag, *sortFlag, *sortDescFlag, *sortFoldFlag, *sortDropFlag, *nullOnMissFlag, *timeFormatFlag, *schemaFormatFlag)
-	if err != nil {
-		fmt.Fprintf(stderr, "gq: %v\n", err)
+	if *maxBytesFlag < 0 {
+		fmt.Fprintln(stderr, "gq: -max-bytes must be non-negative")
 		return 2
 	}
-	for _, w := range warnings {
-		fmt.Fprintf(stderr, "gq: %s\n", w)
+	if *nonfiniteFlag != "strings" && *nonfiniteFlag != "null" {
+		fmt.Fprintf(stderr, "gq: unknown -nonfinite value %q; use strings or null\n", *nonfiniteFlag)
+		return 2
+	}
+
+	if err := validateFlags(setFlags, queryExpr, *formatFlag); err != nil {
+		fmt.Fprintf(stderr, "gq: %v\n", err)
+		return 2
 	}
 
 	path, err := query.Parse(queryExpr)
@@ -146,17 +171,10 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 
 	var r io.Reader
 	if inputPath == "" {
-		br := bufio.NewReader(stdin)
-		if head, _ := br.Peek(2); len(head) == 2 && head[0] == 0x1f && head[1] == 0x8b {
-			gz, err := gzip.NewReader(br)
-			if err != nil {
-				fmt.Fprintf(stderr, "gq: opening gzip stream: %v\n", err)
-				return 1
-			}
-			defer gz.Close()
-			r = gz
-		} else {
-			r = br
+		r, err = maybeGzip(stdin)
+		if err != nil {
+			fmt.Fprintf(stderr, "gq: opening gzip stream: %v\n", err)
+			return 1
 		}
 	} else {
 		f, err := os.Open(inputPath)
@@ -165,15 +183,10 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 			return 1
 		}
 		defer f.Close()
-		r = f
-		if strings.HasSuffix(inputPath, ".gz") {
-			gz, err := gzip.NewReader(f)
-			if err != nil {
-				fmt.Fprintf(stderr, "gq: opening gzip stream: %v\n", err)
-				return 1
-			}
-			defer gz.Close()
-			r = gz
+		r, err = maybeGzip(f)
+		if err != nil {
+			fmt.Fprintf(stderr, "gq: opening gzip stream: %v\n", err)
+			return 1
 		}
 	}
 
@@ -215,15 +228,10 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 			return 1
 		}
 		defer other.Close()
-		var otherReader io.Reader = other
-		if strings.HasSuffix(*diffFlag, ".gz") {
-			gz, err := gzip.NewReader(other)
-			if err != nil {
-				fmt.Fprintf(stderr, "gq: opening diff target gzip stream: %v\n", err)
-				return 1
-			}
-			defer gz.Close()
-			otherReader = gz
+		otherReader, err := maybeGzip(other)
+		if err != nil {
+			fmt.Fprintf(stderr, "gq: opening diff target gzip stream: %v\n", err)
+			return 1
 		}
 		leftVals, err := ins.Stream(r).Collect()
 		if err != nil {
@@ -242,8 +250,9 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 				fmt.Fprintf(stderr, "gq: marshaling diff: %v\n", jerr)
 				return 1
 			}
-			stdout.Write(out)
-			fmt.Fprintln(stdout)
+			if werr := emit(stdout, out); werr != nil {
+				return reportWrite(werr, stderr)
+			}
 		} else {
 			var diffOpts []diff.FormatOption
 			if useColor {
@@ -253,9 +262,10 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 			if s == "" {
 				// Still emit a visible marker so callers can tell "no change"
 				// from "program didn't run".
-				fmt.Fprintln(stdout, "(no differences)")
-			} else {
-				fmt.Fprint(stdout, s)
+				s = "(no differences)\n"
+			}
+			if _, werr := io.WriteString(stdout, s); werr != nil {
+				return reportWrite(werr, stderr)
 			}
 		}
 		if diff.StreamHasChanges(sd) {
@@ -278,15 +288,18 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 			} else {
 				s = schema.String()
 			}
-			fmt.Fprintln(stdout, s)
+			if werr := emit(stdout, []byte(s)); werr != nil {
+				return reportWrite(werr, stderr)
+			}
 		case "json":
 			out, jerr := schema.JSONIndent("", "  ")
 			if jerr != nil {
 				fmt.Fprintf(stderr, "gq: marshaling schema: %v\n", jerr)
 				return 1
 			}
-			stdout.Write(out)
-			fmt.Fprintln(stdout)
+			if werr := emit(stdout, out); werr != nil {
+				return reportWrite(werr, stderr)
+			}
 		default:
 			fmt.Fprintf(stderr, "gq: unknown -schema-format value %q; use go or json\n", *schemaFormatFlag)
 			return 2
@@ -306,8 +319,9 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 			fmt.Fprintf(stderr, "gq: marshaling types: %v\n", jerr)
 			return 1
 		}
-		stdout.Write(out)
-		fmt.Fprintln(stdout)
+		if werr := emit(stdout, out); werr != nil {
+			return reportWrite(werr, stderr)
+		}
 		return 0
 	}
 
@@ -324,13 +338,13 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 				fmt.Fprintf(stderr, "gq: marshaling stats: %v\n", jerr)
 				return 1
 			}
-			stdout.Write(out)
-			fmt.Fprintln(stdout)
+			if werr := emit(stdout, out); werr != nil {
+				return reportWrite(werr, stderr)
+			}
 			return 0
 		}
 		if err := stats.Format(stdout); err != nil {
-			fmt.Fprintf(stderr, "gq: %v\n", err)
-			return 1
+			return reportWrite(err, stderr)
 		}
 		return 0
 	}
@@ -338,6 +352,10 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 	fmtOpts := []gobspect.FormatOption{
 		gobspect.WithBytesFormat(bytesFormat),
 		gobspect.WithMaxBytes(*maxBytesFlag),
+	}
+	var jsonOpts []gobspect.JSONOption
+	if *nonfiniteFlag == "null" {
+		jsonOpts = append(jsonOpts, gobspect.WithNonFiniteAsNull(true))
 	}
 
 	// Aggregation mode: if -count, -sum, -min, -max, or -avg is set, drain
@@ -445,7 +463,7 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 			if tp != nil {
 				writeErr = tp.WriteValue(result)
 			} else {
-				writeErr = printValue(result, stdout, *formatFlag, *rawFlag, *compactFlag, useColor, fmtOpts)
+				writeErr = printValue(result, stdout, *formatFlag, *rawFlag, *compactFlag, useColor, fmtOpts, jsonOpts)
 			}
 			if writeErr != nil {
 				if errors.Is(writeErr, syscall.EPIPE) {
@@ -485,7 +503,7 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 				if tp != nil {
 					writeErr = tp.WriteValue(result)
 				} else {
-					writeErr = printValue(result, stdout, *formatFlag, *rawFlag, *compactFlag, useColor, fmtOpts)
+					writeErr = printValue(result, stdout, *formatFlag, *rawFlag, *compactFlag, useColor, fmtOpts, jsonOpts)
 				}
 				if writeErr != nil {
 					if errors.Is(writeErr, syscall.EPIPE) {
@@ -521,15 +539,15 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 }
 
 // printValue renders and writes a single value to w.
-func printValue(v gobspect.Value, w io.Writer, format string, raw, compact, color bool, fmtOpts []gobspect.FormatOption) error {
+func printValue(v gobspect.Value, w io.Writer, format string, raw, compact, color bool, fmtOpts []gobspect.FormatOption, jsonOpts []gobspect.JSONOption) error {
 	switch format {
 	case "json":
 		var out []byte
 		var err error
 		if compact {
-			out, err = gobspect.ToJSON(v)
+			out, err = gobspect.ToJSON(v, jsonOpts...)
 		} else {
-			out, err = gobspect.ToJSONIndent(v, "", "  ")
+			out, err = gobspect.ToJSONIndent(v, "", "  ", jsonOpts...)
 		}
 		if err != nil {
 			return fmt.Errorf("encoding JSON: %w", err)
@@ -542,7 +560,7 @@ func printValue(v gobspect.Value, w io.Writer, format string, raw, compact, colo
 
 	case "jsonl":
 		// One compact JSON object per line, always — no multi-line indentation.
-		out, err := gobspect.ToJSON(v)
+		out, err := gobspect.ToJSON(v, jsonOpts...)
 		if err != nil {
 			return fmt.Errorf("encoding JSONL: %w", err)
 		}
@@ -580,6 +598,37 @@ func isTerminal(f *os.File) bool {
 	return term.IsTerminal(int(f.Fd()))
 }
 
+// maybeGzip sniffs the gzip magic bytes and transparently decompresses when
+// present. Detection is content-based for files and stdin alike — a gzipped
+// file works regardless of its extension. The gzip layer needs no explicit
+// Close: it wraps a reader whose lifetime the caller already manages.
+func maybeGzip(r io.Reader) (io.Reader, error) {
+	br := bufio.NewReader(r)
+	if head, _ := br.Peek(2); len(head) == 2 && head[0] == 0x1f && head[1] == 0x8b {
+		return gzip.NewReader(br)
+	}
+	return br, nil
+}
+
+// emit writes out followed by a newline to w.
+func emit(w io.Writer, out []byte) error {
+	if _, err := w.Write(out); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintln(w)
+	return err
+}
+
+// reportWrite converts a write error into an exit code: EPIPE is a normal
+// downstream close (exit 0), anything else is reported on stderr (exit 1).
+func reportWrite(err error, stderr io.Writer) int {
+	if errors.Is(err, syscall.EPIPE) {
+		return 0
+	}
+	fmt.Fprintf(stderr, "gq: %v\n", err)
+	return 1
+}
+
 // runAggregate drains the stream, applies path to each top-level value,
 // collects matches, reduces them according to mode, and prints a single
 // result to stdout. mode is one of "count", "sum", "min", "max", "avg". For
@@ -597,40 +646,15 @@ func runAggregate(mode string, aggPath string, stream *gobspect.Stream, matchPat
 		}
 	}
 
-	// Numeric accumulators; we track integer and float separately so values
-	// that fit in int64/uint64 retain precision, falling back to float64
-	// when a float appears.
-	type numeric struct {
-		asFloat float64
-		count   int64
-		minInit bool
-		min     float64
-		max     float64
-		sawAny  bool
-	}
-	var acc numeric
+	var acc numAcc
 	var matchCount int64
 
 	pushNumeric := func(v gobspect.Value) error {
-		f, ok := toFloat(v)
+		i, f, isInt, ok := toNumeric(v)
 		if !ok {
 			return fmt.Errorf("non-numeric value for aggregation: %s", gobspect.ValueKind(v))
 		}
-		acc.asFloat += f
-		acc.count++
-		acc.sawAny = true
-		if !acc.minInit {
-			acc.min = f
-			acc.max = f
-			acc.minInit = true
-		} else {
-			if f < acc.min {
-				acc.min = f
-			}
-			if f > acc.max {
-				acc.max = f
-			}
-		}
+		acc.push(i, f, isInt)
 		return nil
 	}
 
@@ -665,44 +689,128 @@ func runAggregate(mode string, aggPath string, stream *gobspect.Stream, matchPat
 	case "count":
 		fmt.Fprintln(stdout, matchCount)
 	case "sum":
-		fmt.Fprintln(stdout, formatFloat(acc.asFloat))
+		fmt.Fprintln(stdout, acc.sumString())
 	case "min":
 		if !acc.sawAny {
 			fmt.Fprintln(stdout, "null")
 			return 0
 		}
-		fmt.Fprintln(stdout, formatFloat(acc.min))
+		fmt.Fprintln(stdout, acc.minString())
 	case "max":
 		if !acc.sawAny {
 			fmt.Fprintln(stdout, "null")
 			return 0
 		}
-		fmt.Fprintln(stdout, formatFloat(acc.max))
+		fmt.Fprintln(stdout, acc.maxString())
 	case "avg":
 		if acc.count == 0 {
 			fmt.Fprintln(stdout, "null")
 			return 0
 		}
-		fmt.Fprintln(stdout, formatFloat(acc.asFloat/float64(acc.count)))
+		fmt.Fprintln(stdout, formatFloat(acc.sumFloat/float64(acc.count)))
 	}
 	return 0
 }
 
-// toFloat extracts a numeric value from v. Returns (0, false) for non-numeric
-// kinds (including strings and opaques).
-func toFloat(v gobspect.Value) (float64, bool) {
-	if iv, ok := v.(gobspect.InterfaceValue); ok {
+// numAcc accumulates numeric aggregation state. Integer inputs are tracked
+// exactly in int64 alongside the float64 mirror; sum and min/max degrade to
+// the float path only when a float value appears, an integer doesn't fit in
+// int64, or the running sum overflows — so e.g. summing IDs above 2^53 stays
+// exact instead of silently rounding.
+type numAcc struct {
+	count  int64
+	sawAny bool
+
+	intMode bool // all values so far were int64-exact and sumInt hasn't overflowed
+	sumInt  int64
+	minInt  int64
+	maxInt  int64
+
+	sumFloat float64
+	minFloat float64
+	maxFloat float64
+}
+
+// push records one value. For integer-exact inputs isInt is true and i holds
+// the value; f always holds the float64 mirror.
+func (a *numAcc) push(i int64, f float64, isInt bool) {
+	if !a.sawAny {
+		a.sawAny = true
+		a.intMode = isInt
+		a.sumInt, a.minInt, a.maxInt = i, i, i
+		a.sumFloat, a.minFloat, a.maxFloat = f, f, f
+		a.count = 1
+		return
+	}
+	a.count++
+	a.sumFloat += f
+	a.minFloat = min(a.minFloat, f)
+	a.maxFloat = max(a.maxFloat, f)
+	if a.intMode {
+		if !isInt {
+			a.intMode = false
+			return
+		}
+		if s, ok := addInt64(a.sumInt, i); ok {
+			a.sumInt = s
+		} else {
+			a.intMode = false
+			return
+		}
+		a.minInt = min(a.minInt, i)
+		a.maxInt = max(a.maxInt, i)
+	}
+}
+
+func (a *numAcc) sumString() string {
+	if a.intMode {
+		return strconv.FormatInt(a.sumInt, 10)
+	}
+	return formatFloat(a.sumFloat)
+}
+
+func (a *numAcc) minString() string {
+	if a.intMode {
+		return strconv.FormatInt(a.minInt, 10)
+	}
+	return formatFloat(a.minFloat)
+}
+
+func (a *numAcc) maxString() string {
+	if a.intMode {
+		return strconv.FormatInt(a.maxInt, 10)
+	}
+	return formatFloat(a.maxFloat)
+}
+
+// addInt64 adds two int64s, reporting false on overflow.
+func addInt64(a, b int64) (int64, bool) {
+	s := a + b
+	if (a > 0 && b > 0 && s < 0) || (a < 0 && b < 0 && s >= 0) {
+		return 0, false
+	}
+	return s, true
+}
+
+// toNumeric extracts a numeric value from v. isInt reports that i holds the
+// exact value; f always holds the float64 form. Returns ok=false for
+// non-numeric kinds (including strings and opaques).
+func toNumeric(v gobspect.Value) (i int64, f float64, isInt, ok bool) {
+	if iv, isIface := v.(gobspect.InterfaceValue); isIface {
 		v = iv.Value
 	}
 	switch n := v.(type) {
 	case gobspect.IntValue:
-		return float64(n.V), true
+		return n.V, float64(n.V), true, true
 	case gobspect.UintValue:
-		return float64(n.V), true
+		if n.V <= math.MaxInt64 {
+			return int64(n.V), float64(n.V), true, true
+		}
+		return 0, float64(n.V), false, true
 	case gobspect.FloatValue:
-		return n.V, true
+		return 0, n.V, false, true
 	}
-	return 0, false
+	return 0, 0, false, false
 }
 
 // formatFloat renders a numeric accumulator compactly. Integer-valued floats
@@ -724,8 +832,8 @@ func sortPerPartition(results []gobspect.Value, spec sortval.SortSpec) []gobspec
 		id   int
 		vals []gobspect.Value
 	}
-	order := []int{}           // bucket IDs in first-arrival order
-	byID := map[int]*bucket{}  // ID → bucket
+	order := []int{}          // bucket IDs in first-arrival order
+	byID := map[int]*bucket{} // ID → bucket
 	for _, v := range results {
 		id := partitionID(v)
 		b, ok := byID[id]
@@ -756,66 +864,120 @@ func partitionID(v gobspect.Value) int {
 	return 0
 }
 
-func validateFlags(schema, types bool, queryExpr string, format string, index, limit, offset int, compact, raw, color, noColor bool, sort string, sortDesc, sortFold, sortDrop bool, nullOnMiss bool, timeFormat string, schemaFormat string) (warnings []string, err error) {
-	if color && noColor {
-		return nil, fmt.Errorf("cannot use -color and -no-color together")
+// allFlagNames lists every gq flag in a stable order for deterministic
+// validation error messages. Shorthand "f" is normalized to "file" before
+// validation.
+var allFlagNames = []string{
+	"file", "format", "schema", "schema-format", "types", "stats", "index",
+	"bytes", "max-bytes", "color", "no-color", "r", "compact", "null-on-miss",
+	"time-format", "no-headers", "hetero", "limit", "offset", "sort",
+	"sort-desc", "sort-fold", "sort-drop-missing", "skip-errors", "diff",
+	"count", "sum", "min", "max", "avg", "nonfinite",
+}
+
+// aggFlagNames are the mutually exclusive aggregation flags; any one of them
+// selects aggregate mode.
+var aggFlagNames = []string{"count", "sum", "min", "max", "avg"}
+
+// modeFlags are extra flags meaningful in each non-normal mode, beyond the
+// universal set. A set flag not listed here (or in universalFlags) is an
+// error for that mode.
+var modeFlags = map[string]map[string]bool{
+	"diff":      {"format": true, "time-format": true},
+	"schema":    {"schema-format": true},
+	"types":     {},
+	"stats":     {"format": true},
+	"aggregate": {"time-format": true},
+}
+
+// universalFlags are meaningful regardless of mode: input selection, decode
+// behavior, color control, and the mode selectors themselves.
+var universalFlags = map[string]bool{
+	"file": true, "color": true, "no-color": true, "skip-errors": true,
+	"diff": true, "schema": true, "types": true, "stats": true,
+	"count": true, "sum": true, "min": true, "max": true, "avg": true,
+}
+
+// validateFlags rejects flag combinations where a flag would be silently
+// ignored or contradicts the selected mode. set holds the names of flags the
+// user passed explicitly, so defaults never trigger false conflicts.
+func validateFlags(set map[string]bool, queryExpr string, format string) error {
+	if set["color"] && set["no-color"] {
+		return fmt.Errorf("cannot use -color and -no-color together")
 	}
-	if !schema && schemaFormat != "" && schemaFormat != "go" {
-		warnings = append(warnings, "-schema-format has no effect without -schema; ignoring")
+
+	var aggSet []string
+	for _, f := range aggFlagNames {
+		if set[f] {
+			aggSet = append(aggSet, "-"+f)
+		}
 	}
-	if compact && format == "jsonl" {
-		warnings = append(warnings, "-compact has no effect with -format jsonl (jsonl is always compact); ignoring")
+	if len(aggSet) > 1 {
+		return fmt.Errorf("aggregation flags %s are mutually exclusive", strings.Join(aggSet, ", "))
 	}
-	if schema && queryExpr != "" {
-		warnings = append(warnings, "query expression has no effect with -schema; ignoring")
+
+	mode, modeFlag := "normal", ""
+	var modes []string
+	for _, m := range []string{"diff", "schema", "types", "stats"} {
+		if set[m] {
+			modes = append(modes, "-"+m)
+			mode, modeFlag = m, "-"+m
+		}
 	}
-	if types && queryExpr != "" {
-		warnings = append(warnings, "query expression has no effect with -types; ignoring")
+	if len(aggSet) == 1 {
+		modes = append(modes, aggSet[0])
+		mode, modeFlag = "aggregate", aggSet[0]
 	}
-	if schema && format != "pretty" {
-		warnings = append(warnings, fmt.Sprintf("-format %s has no effect with -schema; ignoring", format))
+	if len(modes) > 1 {
+		return fmt.Errorf("%s select conflicting modes; use one", strings.Join(modes, ", "))
 	}
-	if types && format != "pretty" {
-		warnings = append(warnings, fmt.Sprintf("-format %s has no effect with -types; ignoring", format))
+
+	if mode == "normal" {
+		if set["schema-format"] {
+			return fmt.Errorf("-schema-format has no effect without -schema")
+		}
+		if set["compact"] && format != "json" {
+			if format == "jsonl" {
+				return fmt.Errorf("-compact has no effect with -format jsonl (jsonl is always compact)")
+			}
+			return fmt.Errorf("-compact has no effect with -format %s", format)
+		}
+		if set["r"] && format != "pretty" {
+			return fmt.Errorf("-r has no effect with -format %s", format)
+		}
+		if set["nonfinite"] && format != "json" && format != "jsonl" {
+			return fmt.Errorf("-nonfinite has no effect with -format %s", format)
+		}
+		if !set["sort"] {
+			for _, f := range []string{"sort-desc", "sort-fold", "sort-drop-missing"} {
+				if set[f] {
+					return fmt.Errorf("-%s has no effect without -sort", f)
+				}
+			}
+		}
+		return nil
 	}
-	if schema && index >= 0 {
-		warnings = append(warnings, "-index has no effect with -schema; ignoring")
+
+	for _, name := range allFlagNames {
+		if !set[name] || universalFlags[name] || modeFlags[mode][name] {
+			continue
+		}
+		return fmt.Errorf("-%s has no effect with %s", name, modeFlag)
 	}
-	if types && index >= 0 {
-		warnings = append(warnings, "-index has no effect with -types; ignoring")
+	if queryExpr != "" && mode != "aggregate" {
+		return fmt.Errorf("query expression has no effect with %s", modeFlag)
 	}
-	if schema && (limit > 0 || offset > 0) {
-		warnings = append(warnings, "-limit/-offset has no effect with -schema; ignoring")
+
+	// Per-mode output format restrictions.
+	switch mode {
+	case "diff":
+		if set["format"] && format != "pretty" && format != "json" && format != "jsonl" {
+			return fmt.Errorf("-format %s is not supported with -diff; use pretty, json, or jsonl", format)
+		}
+	case "stats":
+		if set["format"] && format != "pretty" && format != "json" {
+			return fmt.Errorf("-format %s is not supported with -stats; use pretty or json", format)
+		}
 	}
-	if types && (limit > 0 || offset > 0) {
-		warnings = append(warnings, "-limit/-offset has no effect with -types; ignoring")
-	}
-	if compact && format != "json" && format != "jsonl" {
-		warnings = append(warnings, fmt.Sprintf("-compact has no effect with -format %s; ignoring", format))
-	}
-	if raw && format != "pretty" {
-		warnings = append(warnings, fmt.Sprintf("-r has no effect with -format %s; ignoring", format))
-	}
-	if schema && sort != "" {
-		warnings = append(warnings, "-sort has no effect with -schema; ignoring")
-	}
-	if types && sort != "" {
-		warnings = append(warnings, "-sort has no effect with -types; ignoring")
-	}
-	if sort == "" && (sortDesc || sortFold || sortDrop) {
-		warnings = append(warnings, "-sort-* flags have no effect without -sort")
-	}
-	if schema && nullOnMiss {
-		warnings = append(warnings, "-null-on-miss has no effect with -schema; ignoring")
-	}
-	if types && nullOnMiss {
-		warnings = append(warnings, "-null-on-miss has no effect with -types; ignoring")
-	}
-	if schema && timeFormat != "" {
-		warnings = append(warnings, "-time-format has no effect with -schema; ignoring")
-	}
-	if types && timeFormat != "" {
-		warnings = append(warnings, "-time-format has no effect with -types; ignoring")
-	}
-	return warnings, nil
+	return nil
 }

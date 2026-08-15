@@ -99,7 +99,7 @@ func exerciseMatching(t *testing.T, p Path) {
 
 			// Invariant 2: Match equivalence under de-sugaring.
 			resGroup := matchesFilter(v, seg)
-			
+
 			anyMatch := false
 			for _, alt := range seg.orAlts {
 				if matchesFilter(v, alt) {
@@ -115,7 +115,7 @@ func exerciseMatching(t *testing.T, p Path) {
 			alts := make([]segment, len(seg.orAlts))
 			copy(alts, seg.orAlts)
 			rand.Shuffle(len(alts), func(i, j int) { alts[i], alts[j] = alts[j], alts[i] })
-			
+
 			shuffledSeg := seg
 			shuffledSeg.orAlts = alts
 			resShuffled := matchesFilter(v, shuffledSeg)
@@ -138,7 +138,7 @@ func exerciseMatching(t *testing.T, p Path) {
 				if len(seg.orAlts) > 3 {
 					nestedSeg.orAlts = append(nestedSeg.orAlts, seg.orAlts[3:]...)
 				}
-				
+
 				resNested := matchesFilter(v, nestedSeg)
 				if resNested != resGroup {
 					t.Errorf("Associativity failure: v=%+v original=%+v nested=%+v", v, seg, nestedSeg)

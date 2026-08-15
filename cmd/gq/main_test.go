@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/gob"
 	"io"
+	"math"
 	"os"
 	"strings"
 	"testing"
@@ -86,16 +88,16 @@ func TestRun_SortFold(t *testing.T) {
 	assert.Less(t, posBob, posCharlie, "Bob should appear before CHARLIE (case-insensitive)")
 }
 
-// TestRun_SortModifiersWithoutSort verifies that -sort-desc without -sort emits a
-// warning but exits 0.
+// TestRun_SortModifiersWithoutSort verifies that -sort-desc without -sort is
+// rejected: it would otherwise be silently ignored.
 func TestRun_SortModifiersWithoutSort(t *testing.T) {
 	r := gobEncodeValues(t, testPerson{Name: "Alice"})
 
 	var stdout, stderr bytes.Buffer
 	exitCode := run([]string{"-sort-desc"}, r, &stdout, &stderr)
 
-	assert.Equal(t, 0, exitCode, "should be a warning, not an error")
-	assert.Contains(t, stderr.String(), "-sort-* flags have no effect without -sort")
+	assert.Equal(t, 2, exitCode)
+	assert.Contains(t, stderr.String(), "-sort-desc has no effect without -sort")
 }
 
 // TestRun_SortWithLimitOffset verifies -sort combined with -limit and -offset
@@ -411,4 +413,96 @@ func TestRun_DiffNoColor(t *testing.T) {
 	exitCode := run([]string{"-diff", rightPath, "-no-color"}, leftBuf, &stdout, &stderr)
 	assert.Equal(t, 1, exitCode, "stderr: %s", stderr.String())
 	assert.NotContains(t, stdout.String(), "\x1b[", "-no-color must suppress ANSI escapes")
+}
+
+// TestRun_HelpExitsZero verifies that explicit -h prints usage to stdout and
+// exits 0 (help is not a usage error).
+func TestRun_HelpExitsZero(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	exitCode := run([]string{"-h"}, strings.NewReader(""), &stdout, &stderr)
+
+	assert.Equal(t, 0, exitCode)
+	assert.Contains(t, stdout.String(), "usage: gq [flags] [query]")
+	assert.Empty(t, stderr.String())
+}
+
+// TestRun_BadFlagExitsTwo verifies that an unknown flag prints usage to
+// stderr and exits 2.
+func TestRun_BadFlagExitsTwo(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	exitCode := run([]string{"-definitely-not-a-flag"}, strings.NewReader(""), &stdout, &stderr)
+
+	assert.Equal(t, 2, exitCode)
+	assert.Contains(t, stderr.String(), "usage: gq [flags] [query]")
+	assert.Empty(t, stdout.String())
+}
+
+// TestRun_GzipFileWithoutSuffix verifies that gzip detection for -f files is
+// content-based: a gzipped file works regardless of its extension.
+func TestRun_GzipFileWithoutSuffix(t *testing.T) {
+	var raw bytes.Buffer
+	require.NoError(t, gob.NewEncoder(&raw).Encode(testPerson{Name: "Zipped"}))
+
+	f, err := os.CreateTemp(t.TempDir(), "data.gob") // no .gz suffix
+	require.NoError(t, err)
+	gz := gzip.NewWriter(f)
+	_, err = gz.Write(raw.Bytes())
+	require.NoError(t, err)
+	require.NoError(t, gz.Close())
+	require.NoError(t, f.Close())
+
+	var stdout, stderr bytes.Buffer
+	exitCode := run([]string{"-f", f.Name()}, strings.NewReader(""), &stdout, &stderr)
+
+	require.Equal(t, 0, exitCode, "stderr: %s", stderr.String())
+	assert.Contains(t, stdout.String(), "Zipped")
+}
+
+type testScore struct{ ID int64 }
+
+// TestRun_SumLargeIntsExact verifies integer aggregation stays exact above
+// 2^53, where float64 accumulation would silently round.
+func TestRun_SumLargeIntsExact(t *testing.T) {
+	// 2^60 + 1 and 2: float64 accumulation would lose the +1.
+	r := gobEncodeValues(t,
+		testScore{ID: 1<<60 + 1},
+		testScore{ID: 2},
+	)
+
+	var stdout, stderr bytes.Buffer
+	exitCode := run([]string{"-sum", "ID"}, r, &stdout, &stderr)
+
+	require.Equal(t, 0, exitCode, "stderr: %s", stderr.String())
+	assert.Equal(t, "1152921504606846979\n", stdout.String(), "sum must be exact, not float64-rounded")
+}
+
+// TestRun_SumDegradesToFloat verifies mixed int/float aggregation produces a
+// float result.
+func TestRun_SumDegradesToFloat(t *testing.T) {
+	type mixed struct{ V float64 }
+	r := gobEncodeValues(t, mixed{V: 1.5}, mixed{V: 2})
+
+	var stdout, stderr bytes.Buffer
+	exitCode := run([]string{"-sum", "V"}, r, &stdout, &stderr)
+
+	require.Equal(t, 0, exitCode, "stderr: %s", stderr.String())
+	assert.Equal(t, "3.5\n", stdout.String())
+}
+
+// TestRun_NonFiniteJSON verifies NaN floats serialize as strings by default
+// and as null under -nonfinite null, instead of failing the document.
+func TestRun_NonFiniteJSON(t *testing.T) {
+	type withNaN struct{ F float64 }
+	v := withNaN{F: math.NaN()}
+
+	var stdout, stderr bytes.Buffer
+	exitCode := run([]string{"-format", "json"}, gobEncodeValues(t, v), &stdout, &stderr)
+	require.Equal(t, 0, exitCode, "stderr: %s", stderr.String())
+	assert.Contains(t, stdout.String(), `"NaN"`)
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = run([]string{"-format", "json", "-nonfinite", "null"}, gobEncodeValues(t, v), &stdout, &stderr)
+	require.Equal(t, 0, exitCode, "stderr: %s", stderr.String())
+	assert.Contains(t, stdout.String(), `"v": null`)
 }

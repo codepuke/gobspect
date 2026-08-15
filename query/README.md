@@ -65,7 +65,9 @@ Segments are separated by `.`.
 
 An empty path (`""`) resolves to the root value itself.
 
-`InterfaceValue` nodes are unwrapped transparently: you do not need to add extra segments to step through an interface wrapper.
+`InterfaceValue` nodes are unwrapped transparently: you do not need to add extra segments to step through an interface wrapper. This applies during navigation, to map keys (a `map[any]T` whose keys are strings navigates like `map[string]T`), and to returned values — results are the inner concrete values.
+
+`Get` returns the **first match of `All`** in document order, evaluated lazily: a fan-out segment (`*`, a filter, or `..`) tries later elements when the rest of the path fails on earlier ones.
 
 ## Filter syntax
 
@@ -160,6 +162,8 @@ Keeps elements where `Field` is a number or bool matching `value`. The `==`, `<`
 
 Bool literals are case-insensitive: `true`, `True`, `TRUE` all match `BoolValue{true}`. Any other word (e.g. `banana`) is a **parse-time error** — `Parse` returns a `*ParseError` and `All`/`Get`/`MustGet` panic.
 
+Integer comparisons are exact across the full `int64`/`uint64` range — including values near `MaxInt64`/`MaxUint64` and integer literals that overflow both ranges. Only `FloatValue` fields and float-syntax literals (containing `.` or an exponent) use floating-point comparison.
+
 ```go
 query.All(root, "Items[Count==5]")
 query.All(root, "Items[Price<100]")
@@ -244,7 +248,7 @@ query.All(root, "Billing/Zip,Shipping/Zip")  // error: duplicate column "Zip"
 
 ## Map key navigation
 
-Map navigation matches path segments (and filter field names) against map keys that are `StringValue` — i.e., maps declared as `map[string]T`. Maps with non-string keys (`map[int]T`, `map[uint64]T`, etc.) cannot be navigated by path: entries with non-string keys are silently skipped.
+Map navigation matches path segments (and filter field names) against map keys that are `StringValue` — maps declared as `map[string]T`, and interface-keyed maps (`map[any]T`) for their entries whose keys hold strings (interface wrappers around keys are unwrapped transparently). Maps with non-string keys (`map[int]T`, `map[uint64]T`, etc.) cannot be navigated by path: entries with non-string keys are silently skipped.
 
 Numeric-looking map keys (for `map[string]T` with `"42"` as a key) ARE navigable — integer-looking segments fall back to string key lookup when the node is a map.
 
@@ -272,7 +276,7 @@ func AllSeq(root gobspect.Value, expr string) iter.Seq[gobspect.Value]
 func Keys(root gobspect.Value, expr string) ([]string, bool)
 ```
 
-`Get` returns `(nil, false)` when the path does not resolve. `MustGet` panics with a message identifying the full expression and the failing segment. `All` returns `nil` (not an empty slice) when nothing matches. `AllSeq` is the lazy iterator variant — use it for early-break or streaming scenarios.
+`Get` returns the first match of `All` in document order, or `(nil, false)` when the path matches nothing. `MustGet` panics with a message identifying the full expression and the failing segment. `All` returns `nil` (not an empty slice) when nothing matches. `AllSeq` is the lazy iterator variant — use it for early-break or streaming scenarios.
 
 ### Pre-compiled path functions
 
@@ -344,3 +348,5 @@ t, err := query.SchemaAt(schema, "Order", p)
 ```
 
 When a path contains a recursive-descent segment (`..`), `SchemaAt` widens its search to every type reachable from the current candidates and reports the **union** of distinct result types as a pipe-joined string (`"int|string"`) in sorted order. For `map[string]T` fields, the value type `T` is also a candidate because any runtime string key could match the descent name.
+
+Filters directly following a wildcard descend (`..[Status=active]`) are treated as per-node predicates, matching the runtime: the result is the union of reachable types that could satisfy the filter — named struct types declaring the field, plus string-keyed map types. `[Field!!]` keeps every reachable type, since any node lacking the field passes.

@@ -44,6 +44,12 @@ func parseTimeBytes(data []byte) (unixSec int64, nsec int32, offsetSec int, err 
 	sec := int64(data[1])<<56 | int64(data[2])<<48 | int64(data[3])<<40 | int64(data[4])<<32 |
 		int64(data[5])<<24 | int64(data[6])<<16 | int64(data[7])<<8 | int64(data[8])
 	nsec32 := int32(data[9])<<24 | int32(data[10])<<16 | int32(data[11])<<8 | int32(data[12])
+	// The encoder only produces normalized nanoseconds. Out-of-range values
+	// would render garbage like ".-000000001" — and the two time decoders
+	// would disagree, since time.Unix normalizes by borrowing seconds.
+	if nsec32 < 0 || nsec32 >= 1_000_000_000 {
+		return 0, 0, 0, fmt.Errorf("time.Time: nanoseconds %d out of range", nsec32)
+	}
 	offsetMin := int16(data[13])<<8 | int16(data[14])
 
 	// offsetMin == -1 is the sentinel for UTC; all others are minutes east of UTC.
@@ -200,7 +206,9 @@ func decodeBigRat(data []byte) (any, error) {
 	}
 	neg := b&1 != 0
 	numLen := int(binary.BigEndian.Uint32(data[1:5]))
-	if 5+numLen > len(data) {
+	// On 32-bit platforms the uint32→int conversion can go negative, and
+	// 5+numLen can wrap; compare against len(data)-5 to avoid both.
+	if numLen < 0 || numLen > len(data)-5 {
 		return nil, fmt.Errorf("big.Rat: numerator length %d exceeds data", numLen)
 	}
 	numAbs := data[5 : 5+numLen]
@@ -250,7 +258,7 @@ func decodeBigAuto(data []byte) (any, error) {
 	}
 	if len(data) >= 5 {
 		numLen := int(binary.BigEndian.Uint32(data[1:5]))
-		if numLen <= len(data)-5 {
+		if numLen >= 0 && numLen <= len(data)-5 {
 			return decodeBigRat(data)
 		}
 	}
@@ -276,23 +284,38 @@ func decodeBigFloat(data []byte) (any, error) {
 	if err := f.GobDecode(data); err != nil {
 		return nil, fmt.Errorf("math/big.Float: %w", err)
 	}
+	// Text('f', -1) materializes every digit down to the units place — about
+	// |exp|/3.3 characters — and the exponent comes off the wire, so a hostile
+	// blob could demand a multi-hundred-megabyte string. Fall back to
+	// scientific notation outside a generous magnitude range.
+	if exp := f.MantExp(nil); exp > 1<<16 || exp < -(1<<16) {
+		return f.Text('g', -1), nil
+	}
 	return f.Text('f', -1), nil
 }
 
+// maxDecimalExp bounds the exponent accepted from a decimal.Decimal blob.
+// The exponent contributes |exp| zero characters to the rendered string, so
+// an unchecked hostile value could demand gigabytes (or, at math.MinInt32,
+// overflow negation and panic). Real exponents are tiny.
+const maxDecimalExp = 10000
+
 // decodeShopspringDecimal decodes a shopspring/decimal.Decimal binary blob.
 //
-// Wire format: all bytes except the last 4 are a math/big.Int encoded in the
-// same format as decodeBigInt (sign/version byte + big-endian absolute value).
-// The last 4 bytes are a big-endian int32 exponent. The decimal value is
-// intValue × 10^exp.
+// Wire format: the first 4 bytes are a big-endian int32 exponent, followed
+// by a math/big.Int encoded in the same format as decodeBigInt (sign/version
+// byte + big-endian absolute value). The decimal value is intValue × 10^exp.
+// GobEncode and MarshalBinary share this layout.
 func decodeShopspringDecimal(data []byte) (any, error) {
 	if len(data) < 4 {
 		return nil, fmt.Errorf("decimal.Decimal: too short: %d bytes", len(data))
 	}
-	intData := data[:len(data)-4]
-	exp := int32(binary.BigEndian.Uint32(data[len(data)-4:]))
+	exp := int32(binary.BigEndian.Uint32(data[:4]))
+	if exp > maxDecimalExp || exp < -maxDecimalExp {
+		return nil, fmt.Errorf("decimal.Decimal: exponent %d out of range", exp)
+	}
 
-	v, err := decodeBigInt(intData)
+	v, err := decodeBigInt(data[4:])
 	if err != nil {
 		return nil, fmt.Errorf("decimal.Decimal: %w", err)
 	}
@@ -308,7 +331,7 @@ func decodeShopspringDecimal(data []byte) (any, error) {
 
 	neg := false
 	digits := s
-	if len(s) > 0 && s[0] == '-' {
+	if s[0] == '-' {
 		neg = true
 		digits = s[1:]
 	}
@@ -375,45 +398,12 @@ func decodeUUID(data []byte) (any, error) {
 }
 
 // bigEndianToDecimal converts a big-endian unsigned integer (as bytes) to a
-// decimal string. Uses repeated division by 10.
+// decimal string. Delegates to math/big, whose conversion is sub-quadratic —
+// blob length is attacker-controlled, so a hand-rolled O(n²) division loop
+// would be a CPU DoS on large inputs.
 func bigEndianToDecimal(b []byte) string {
 	if len(b) == 0 {
 		return "0"
 	}
-	n := make([]byte, len(b))
-	copy(n, b)
-	var digits []byte
-	for !allZero(n) {
-		r := divByTen(n)
-		digits = append(digits, '0'+r)
-	}
-	if len(digits) == 0 {
-		return "0"
-	}
-	// Reverse: digits were collected least-significant-first.
-	for i, j := 0, len(digits)-1; i < j; i, j = i+1, j-1 {
-		digits[i], digits[j] = digits[j], digits[i]
-	}
-	return string(digits)
-}
-
-func allZero(b []byte) bool {
-	for _, v := range b {
-		if v != 0 {
-			return false
-		}
-	}
-	return true
-}
-
-// divByTen divides the big-endian unsigned integer b by 10 in place.
-// Returns the remainder (0–9).
-func divByTen(b []byte) byte {
-	var r uint16
-	for i := range b {
-		r = r*256 + uint16(b[i])
-		b[i] = byte(r / 10)
-		r %= 10
-	}
-	return byte(r)
+	return new(big.Int).SetBytes(b).String()
 }

@@ -42,14 +42,14 @@ func TestORGroupSeedCorpus(t *testing.T) {
 			s1 := p.String()
 			p2, err := Parse(s1)
 			require.NoError(t, err, "re-parse failed for %q (s1=%q)", tt.expr, s1)
-			
+
 			// We use reflect.DeepEqual to check AST identity.
 			// Note: if the parser or String() normalization changes the AST, this might fail
 			// but for these cases it should be identical.
 			if !reflect.DeepEqual(p, p2) {
 				t.Errorf("AST drift for %q\nGOT:  %+v\nWANT: %+v", tt.expr, p2, p)
 			}
-			
+
 			s2 := p2.String()
 			assert.Equal(t, s1, s2, "String() drift for %q", tt.expr)
 		})

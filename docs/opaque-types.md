@@ -94,18 +94,25 @@ Format: exactly 16 bytes, raw RFC 4122 layout.
 
 Rendered as: standard UUID string. Example: `550e8400-e29b-41d4-a716-446655440000`
 
-The type name in the stream will be `uuid.UUID` for both libraries. The decoder matches on this name.
+The type name in the stream is the bare `UUID` for both libraries (gob uses
+`reflect.Type.Name()`, which has no package qualifier). The decoder is
+registered under `UUID`, with `uuid.UUID` kept as an alias for explicit
+lookups.
 
 ### shopspring/decimal.Decimal (GobEncoderT)
 
-Format: `big.Int` coefficient followed by 4-byte exponent.
+Format: 4-byte exponent followed by `big.Int` coefficient. (The library's
+`MarshalBinary` writes the exponent first because it has a fixed size;
+`GobEncode` delegates to `MarshalBinary`, so both share this layout.)
 
 | Offset | Size | Content |
 |---|---|---|
-| 0 | len-4 | Coefficient, encoded as `big.Int` (sign byte + big-endian absolute value) |
-| len-4 | 4 | Exponent, big-endian int32 |
+| 0 | 4 | Exponent, big-endian int32 |
+| 4 | len-4 | Coefficient, encoded as `big.Int` (sign byte + big-endian absolute value) |
 
-The decimal value is `coefficient × 10^exponent`.
+The decimal value is `coefficient × 10^exponent`. Exponents outside
+±10000 are rejected: they cannot come from the real library and an
+unchecked value could demand a gigabyte-scale rendered string.
 
 Rendered as: reconstructed decimal string. Example: `123.45` (coefficient=12345, exponent=-2)
 
@@ -121,7 +128,7 @@ Decoding delegates to the stdlib's own `UnmarshalBinary` on a zero-valued receiv
 
 Rendered as: the canonical textual form — `"1.2.3.4"`, `"::1"`, `"10.0.0.0/24"`, `"1.2.3.4:80"`, `"[fe80::1]:8080"`.
 
-Registered under the keys `netip.Addr`, `netip.Prefix`, and `netip.AddrPort` respectively, matching the CommonType.Name gob emits when these types are encoded through an interface.
+Registered under the bare keys `Addr`, `Prefix`, and `AddrPort` — the CommonType.Name gob emits is the unqualified `reflect.Type.Name()`. The qualified `netip.*` keys are kept as aliases for explicit lookups.
 
 ## Fallback for Unknown Types
 

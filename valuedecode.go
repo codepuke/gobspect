@@ -19,6 +19,26 @@ func (mr *messageReader) ReadByte() (byte, error) {
 	return mr.cur.ReadByte()
 }
 
+// srcRemaining reports the number of unread bytes in r's current source, or
+// -1 when the source cannot say. Message bodies are fully buffered in a
+// bytes.Reader, so within a message the count is exact; it is used to
+// validate wire-supplied lengths before allocating.
+func srcRemaining(r io.ByteReader) int {
+	if mr, ok := r.(*messageReader); ok {
+		r = mr.cur
+	}
+	if l, ok := r.(interface{ Len() int }); ok {
+		return l.Len()
+	}
+	return -1
+}
+
+// maxDecodeDepth bounds value nesting. A hostile stream can define a
+// self-referential type graph whose value encoding recurses once per input
+// byte; without a bound that exhausts the goroutine stack, which is a fatal,
+// unrecoverable runtime error rather than a panic.
+const maxDecodeDepth = 10000
+
 // valueDecoder decodes gob value messages into the Value AST.
 // It shares the registry with the streamDecoder so type definitions
 // registered during stream processing are visible here.
@@ -26,6 +46,7 @@ type valueDecoder struct {
 	ins      *Inspector
 	sd       *streamDecoder
 	registry map[int]wireTypeDef
+	depth    int
 }
 
 func newValueDecoder(ins *Inspector, sd *streamDecoder) *valueDecoder {
@@ -60,6 +81,12 @@ func (vd *valueDecoder) decodeTopLevelValue(typeID int, r *messageReader) (Value
 // body of a singleton value (after the uint(0) prefix is stripped).
 // It does NOT handle the singleton uint(0) prefix itself.
 func (vd *valueDecoder) decodeFieldValue(typeID int, r *messageReader) (Value, error) {
+	if vd.depth >= maxDecodeDepth {
+		return nil, fmt.Errorf("gob: value nesting exceeds %d levels", maxDecodeDepth)
+	}
+	vd.depth++
+	defer func() { vd.depth-- }()
+
 	switch typeID {
 	case 1:
 		return vd.decodeBool(r)
@@ -176,7 +203,7 @@ func (vd *valueDecoder) decodeBytes(r io.ByteReader) (Value, error) {
 // Zero-valued fields are omitted. A delta of 0 terminates the sequence.
 func (vd *valueDecoder) decodeStructValue(typeID int, def *wireStructType, r *messageReader) (Value, error) {
 	sv := StructValue{
-		TypeName: def.Common.Name,
+		TypeName:  def.Common.Name,
 		GobTypeID: typeID,
 	}
 	fieldIdx := -1 // mirrors encoder's state.fieldnum, starts at -1
@@ -219,16 +246,19 @@ func (vd *valueDecoder) decodeSliceValue(typeID int, def *wireSliceType, r *mess
 		return nil, fmt.Errorf("gob: slice element count %d exceeds limit", count)
 	}
 	sv := SliceValue{
-		TypeName: def.Common.Name,
+		TypeName:  def.Common.Name,
 		GobTypeID: typeID,
-		ElemType: vd.typeLabel(def.Elem),
-		Elems:    make([]Value, count),
+		ElemType:  vd.typeLabel(def.Elem),
+		// The count comes off the wire; grow with append so a hostile count
+		// cannot force a giant allocation before any element bytes exist.
+		Elems: make([]Value, 0, min(count, 4096)),
 	}
-	for i := range sv.Elems {
-		sv.Elems[i], err = vd.decodeFieldValue(def.Elem, r)
+	for i := uint64(0); i < count; i++ {
+		el, err := vd.decodeFieldValue(def.Elem, r)
 		if err != nil {
 			return nil, fmt.Errorf("gob: decoding slice element %d: %w", i, err)
 		}
+		sv.Elems = append(sv.Elems, el)
 	}
 	return sv, nil
 }
@@ -243,13 +273,14 @@ func (vd *valueDecoder) decodeMapValue(typeID int, def *wireMapType, r *messageR
 		return nil, fmt.Errorf("gob: map entry count %d exceeds limit", count)
 	}
 	mv := MapValue{
-		TypeName: def.Common.Name,
+		TypeName:  def.Common.Name,
 		GobTypeID: typeID,
-		KeyType:  vd.typeLabel(def.Key),
-		ElemType: vd.typeLabel(def.Elem),
-		Entries:  make([]MapEntry, count),
+		KeyType:   vd.typeLabel(def.Key),
+		ElemType:  vd.typeLabel(def.Elem),
+		// Wire-supplied count: grow with append, as in decodeSliceValue.
+		Entries: make([]MapEntry, 0, min(count, 4096)),
 	}
-	for i := range mv.Entries {
+	for i := uint64(0); i < count; i++ {
 		key, err := vd.decodeFieldValue(def.Key, r)
 		if err != nil {
 			return nil, fmt.Errorf("gob: decoding map key %d: %w", i, err)
@@ -258,7 +289,7 @@ func (vd *valueDecoder) decodeMapValue(typeID int, def *wireMapType, r *messageR
 		if err != nil {
 			return nil, fmt.Errorf("gob: decoding map value %d: %w", i, err)
 		}
-		mv.Entries[i] = MapEntry{Key: key, Value: val}
+		mv.Entries = append(mv.Entries, MapEntry{Key: key, Value: val})
 	}
 	return mv, nil
 }
@@ -274,17 +305,19 @@ func (vd *valueDecoder) decodeArrayValue(typeID int, def *wireArrayType, r *mess
 		return nil, fmt.Errorf("gob: array element count %d exceeds limit", count)
 	}
 	av := ArrayValue{
-		TypeName: def.Common.Name,
+		TypeName:  def.Common.Name,
 		GobTypeID: typeID,
-		ElemType: vd.typeLabel(def.Elem),
-		Len:      def.Len,
-		Elems:    make([]Value, count),
+		ElemType:  vd.typeLabel(def.Elem),
+		Len:       def.Len,
+		// Wire-supplied count: grow with append, as in decodeSliceValue.
+		Elems: make([]Value, 0, min(count, 4096)),
 	}
-	for i := range av.Elems {
-		av.Elems[i], err = vd.decodeFieldValue(def.Elem, r)
+	for i := uint64(0); i < count; i++ {
+		el, err := vd.decodeFieldValue(def.Elem, r)
 		if err != nil {
 			return nil, fmt.Errorf("gob: decoding array element %d: %w", i, err)
 		}
+		av.Elems = append(av.Elems, el)
 	}
 	return av, nil
 }
@@ -311,19 +344,32 @@ func (vd *valueDecoder) decodeOpaqueValue(typeID int, typeName, encoding string,
 		ov.Decoded = string(raw)
 	} else if typeName == "" {
 		// Empty type name: try anonymous decoders in registration order,
-		// stopping at the first one that returns a non-error result.
+		// stopping at the first one that returns a usable result.
 		for _, dec := range vd.ins.anonymousDecoders {
-			if decoded, decErr := dec(raw); decErr == nil {
+			if decoded, decErr := safeDecode(dec, raw); decErr == nil && decoded != nil {
 				ov.Decoded = decoded
 				break
 			}
 		}
 	} else if dec, ok := vd.ins.decoders[typeName]; ok {
-		if decoded, decErr := dec(raw); decErr == nil {
+		if decoded, decErr := safeDecode(dec, raw); decErr == nil {
 			ov.Decoded = decoded
 		}
 	}
 	return ov, nil
+}
+
+// safeDecode invokes an opaque DecoderFunc, converting a panic into an error.
+// The dispatch key is the wire-supplied type name, so a hostile stream can
+// route arbitrary blobs to any registered decoder; a decoder tripping over
+// such input must degrade to raw-bytes display, not take the process down.
+func safeDecode(dec DecoderFunc, raw []byte) (decoded any, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			err = fmt.Errorf("gob: opaque decoder panicked: %v", p)
+		}
+	}()
+	return dec(raw)
 }
 
 // decodeInterface decodes a gob interface-typed field.
@@ -346,6 +392,11 @@ func (vd *valueDecoder) decodeInterface(r *messageReader) (Value, error) {
 	}
 	if nameLen == 0 {
 		return InterfaceValue{Value: NilValue{}}, nil
+	}
+	// The stdlib decoder caps registered type names at 1024 bytes; anything
+	// longer cannot name a real registered type.
+	if nameLen > 1024 {
+		return nil, fmt.Errorf("gob: interface type name length %d exceeds limit", nameLen)
 	}
 
 	nameBytes, err := readBytes(r, nameLen)
@@ -371,7 +422,11 @@ func (vd *valueDecoder) decodeInterface(r *messageReader) (Value, error) {
 			}
 			if rawID < 0 {
 				// Separate type def outer message: process and continue.
-				if err2 := vd.sd.processTypeDef(int(-rawID), msgR); err2 != nil {
+				defID, err2 := typeDefID(rawID)
+				if err2 == nil {
+					err2 = vd.sd.processTypeDef(defID, msgR)
+				}
+				if err2 != nil {
 					return nil, err2
 				}
 				vd.sd.advanceMessage()
@@ -394,12 +449,17 @@ func (vd *valueDecoder) decodeInterface(r *messageReader) (Value, error) {
 		}
 		// Negative: inline type def in the current message body.
 		// Read wireType body and register it with incremental resolution.
-		inlineID := int(-id)
+		inlineID, err := typeDefID(id)
+		if err != nil {
+			return nil, err
+		}
 		def, defErr := decodeWireType(r)
 		if defErr != nil {
 			return nil, fmt.Errorf("gob: decoding inline wireType id %d for interface %q: %w", inlineID, typeName, defErr)
 		}
-		_ = vd.sd.registerAndResolve(inlineID, def) // best-effort; decode continues on error
+		if err := vd.sd.registerAndResolve(inlineID, def); err != nil {
+			return nil, fmt.Errorf("gob: registering inline wireType id %d for interface %q: %w", inlineID, typeName, err)
+		}
 	}
 
 	// The encoder prefixes the concrete value bytes with their length.

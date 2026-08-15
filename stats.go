@@ -25,7 +25,10 @@ type Stats struct {
 	TotalBodyBytes int64
 	// TypeDefMessages counts messages that carry a type definition.
 	TypeDefMessages int
-	// ValueMessages counts messages that carry a top-level value.
+	// ValueMessages counts messages whose top-level value decoded
+	// successfully. Corrupt value messages skipped under
+	// [WithSkipCorruptValues] appear in Skipped instead, so a message never
+	// counts in both.
 	ValueMessages int
 
 	// ByType summarises value messages grouped by the top-level type ID.
@@ -62,8 +65,9 @@ type TypeStats struct {
 }
 
 // Stats drains the remainder of the stream, accumulating per-type and
-// per-field statistics. Returns a partial Stats alongside any error. Value-
-// level decode failures count toward Skipped when [WithSkipCorruptValues] is
+// per-field statistics. On error it returns (nil, err): a Stats always
+// describes a completely drained stream, never an aborted pass. Value-level
+// decode failures count toward Skipped when [WithSkipCorruptValues] is
 // enabled and otherwise abort the pass.
 //
 // Stats consumes the stream — a subsequent call to Values or Messages will
@@ -83,34 +87,56 @@ func (s *Stream) Stats() (*Stats, error) {
 			break
 		}
 		if err != nil {
-			out.finalize(byID, s)
-			return out, s.sd.wrapErr(err)
+			return nil, s.sd.wrapErr(err)
 		}
 		out.TotalMessages++
 		out.TotalBodyBytes += int64(info.BodyLen)
 
-		if rawID < 0 {
+		// Mirror drainSeq: a message may pack several type definitions and
+		// an optional trailing value. A packed message counts toward both
+		// TypeDefMessages and ValueMessages.
+		hasValue := true
+		for rawID < 0 {
 			out.TypeDefMessages++
-			if tdErr := s.sd.processTypeDef(int(-rawID), msgR); tdErr != nil {
-				out.finalize(byID, s)
-				return out, s.sd.wrapErr(tdErr)
+			id, tdErr := typeDefID(rawID)
+			if tdErr == nil {
+				tdErr = s.sd.processTypeDef(id, msgR)
 			}
+			if tdErr != nil {
+				return nil, s.sd.wrapErr(tdErr)
+			}
+			if msgR.Len() == 0 {
+				hasValue = false
+				break
+			}
+			rawID, err = decodeInt(msgR)
+			if err != nil {
+				return nil, s.sd.wrapErr(fmt.Errorf("gob: reading type ID: %w", err))
+			}
+		}
+		if !hasValue {
 			s.sd.advanceMessage()
 			continue
 		}
 
-		out.ValueMessages++
-		v, decErr := s.vd.decodeTopLevelValue(int(rawID), &messageReader{cur: msgR})
+		valueIdx, valueStart := s.sd.msgIdx, s.sd.msgStart
+		mr := &messageReader{cur: msgR}
+		v, decErr := s.vd.decodeTopLevelValue(int(rawID), mr)
+		if decErr == nil {
+			if rem := srcRemaining(mr); rem > 0 {
+				decErr = fmt.Errorf("gob: %d trailing bytes after value", rem)
+			}
+		}
 		if decErr != nil {
 			if s.skipCorrupt {
 				s.skipCount++
 				s.sd.advanceMessage()
 				continue
 			}
-			out.finalize(byID, s)
-			return out, s.sd.wrapErr(decErr)
+			return nil, s.sd.wrapErrAt(valueIdx, valueStart, decErr)
 		}
 		s.sd.advanceMessage()
+		out.ValueMessages++
 
 		typeID := topLevelTypeID(v)
 		ts, ok := byID[typeID]
@@ -171,7 +197,14 @@ func accumulateFieldPresence(ts *TypeStats, v Value) {
 	if ts.FieldPresence == nil {
 		ts.FieldPresence = map[string]int{}
 	}
+	// Count each field name at most once per value: a hostile type definition
+	// can list the same name repeatedly, which would push presence above 100%.
+	seen := make(map[string]bool, len(sv.Fields))
 	for _, f := range sv.Fields {
+		if seen[f.Name] {
+			continue
+		}
+		seen[f.Name] = true
 		ts.FieldPresence[f.Name]++
 	}
 }

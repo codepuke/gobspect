@@ -12,6 +12,8 @@
 package diff
 
 import (
+	"fmt"
+
 	"github.com/codepuke/gobspect"
 )
 
@@ -184,6 +186,13 @@ func diffStruct(a, b gobspect.StructValue) Delta {
 	return out
 }
 
+// mapKeyID returns a collision-safe identity string for a map key. The
+// formatted text alone is not injective — IntValue{1} and UintValue{1} both
+// render "1" — so the concrete kind is included as a discriminator.
+func mapKeyID(v gobspect.Value) string {
+	return fmt.Sprintf("%T|%s", v, gobspect.Format(v))
+}
+
 func diffMap(a, b gobspect.MapValue) Delta {
 	var out MapDelta
 	// Build a keyed lookup for b.
@@ -191,16 +200,16 @@ func diffMap(a, b gobspect.MapValue) Delta {
 		val gobspect.Value
 		key gobspect.Value
 	}
-	bByFormat := make(map[string]bIndex, len(b.Entries))
+	bByKey := make(map[string]bIndex, len(b.Entries))
 	for _, e := range b.Entries {
-		bByFormat[gobspect.Format(e.Key)] = bIndex{val: e.Value, key: e.Key}
+		bByKey[mapKeyID(e.Key)] = bIndex{val: e.Value, key: e.Key}
 	}
 	seen := make(map[string]struct{}, len(a.Entries))
 
 	for _, ae := range a.Entries {
-		k := gobspect.Format(ae.Key)
+		k := mapKeyID(ae.Key)
 		seen[k] = struct{}{}
-		if bi, ok := bByFormat[k]; ok {
+		if bi, ok := bByKey[k]; ok {
 			if d := Diff(ae.Value, bi.val); d != nil {
 				out.Entries = append(out.Entries, MapEntryDelta{Key: ae.Key, Delta: d})
 			}
@@ -209,7 +218,7 @@ func diffMap(a, b gobspect.MapValue) Delta {
 		}
 	}
 	for _, be := range b.Entries {
-		if _, ok := seen[gobspect.Format(be.Key)]; !ok {
+		if _, ok := seen[mapKeyID(be.Key)]; !ok {
 			out.Entries = append(out.Entries, MapEntryDelta{Key: be.Key, Delta: Added{Value: be.Value}})
 		}
 	}

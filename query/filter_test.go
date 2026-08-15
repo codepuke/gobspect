@@ -80,7 +80,7 @@ func TestFilterExistInterfaceValueUnwrap(t *testing.T) {
 
 	got := All(items, "[Name!]")
 	require.Len(t, got, 2)
-	// Elements are still wrapped in InterfaceValue after filtering.
+	// Result values are unwrapped from their InterfaceValue wrappers.
 	assert.Equal(t, makeString("A"), MustGet(got[0], "Name"))
 	assert.Equal(t, makeString("B"), MustGet(got[1], "Name"))
 }
@@ -1176,9 +1176,9 @@ func TestFilterORInWildcardDescent(t *testing.T) {
 // TestFilterBoolEqEdgeCases is a table-driven test covering bool filter matching,
 // case-insensitive literal parsing, and parse-time rejection of invalid literals.
 func TestFilterBoolEqEdgeCases(t *testing.T) {
-	trueItem  := makeStruct("Item", field_("Enabled", makeBool(true)),  field_("ID", makeInt(1)))
+	trueItem := makeStruct("Item", field_("Enabled", makeBool(true)), field_("ID", makeInt(1)))
 	falseItem := makeStruct("Item", field_("Enabled", makeBool(false)), field_("ID", makeInt(2)))
-	both      := makeSlice(trueItem, falseItem)
+	both := makeSlice(trueItem, falseItem)
 
 	matchCases := []struct {
 		name    string
@@ -1187,12 +1187,12 @@ func TestFilterBoolEqEdgeCases(t *testing.T) {
 		wantLen int
 		wantID  int64
 	}{
-		{"[Enabled==true] matches BoolValue{true}",          "[Enabled==true]",  both,      1, 1},
-		{"[Enabled==true] no match BoolValue{false}",        "[Enabled==true]",  falseItem, 0, 0},
-		{"[Enabled==false] matches BoolValue{false}",        "[Enabled==false]", both,      1, 2},
-		{"[Enabled==false] no match BoolValue{true}",        "[Enabled==false]", trueItem,  0, 0},
-		{"[Enabled==TRUE] matches BoolValue{true} case-ins", "[Enabled==TRUE]",  both,      1, 1},
-		{"[Enabled==FALSE] matches BoolValue{false} case-ins","[Enabled==FALSE]", both,     1, 2},
+		{"[Enabled==true] matches BoolValue{true}", "[Enabled==true]", both, 1, 1},
+		{"[Enabled==true] no match BoolValue{false}", "[Enabled==true]", falseItem, 0, 0},
+		{"[Enabled==false] matches BoolValue{false}", "[Enabled==false]", both, 1, 2},
+		{"[Enabled==false] no match BoolValue{true}", "[Enabled==false]", trueItem, 0, 0},
+		{"[Enabled==TRUE] matches BoolValue{true} case-ins", "[Enabled==TRUE]", both, 1, 1},
+		{"[Enabled==FALSE] matches BoolValue{false} case-ins", "[Enabled==FALSE]", both, 1, 2},
 	}
 	for _, tc := range matchCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1208,11 +1208,11 @@ func TestFilterBoolEqEdgeCases(t *testing.T) {
 
 	// Non-bool, non-numeric patterns on == must be rejected at parse time.
 	errCases := []struct {
-		name    string
-		filter  string
-		wantIn  string
+		name   string
+		filter string
+		wantIn string
 	}{
-		{"banana is not a bool or number",   "[Enabled==banana]",  "banana"},
+		{"banana is not a bool or number", "[Enabled==banana]", "banana"},
 		{"bare word is not a bool or number", "[Enabled==notabool]", "notabool"},
 	}
 	for _, tc := range errCases {

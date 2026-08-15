@@ -2,6 +2,7 @@ package gobspect
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -16,6 +17,11 @@ import (
 // InterfaceValue wrappers are unwrapped on both sides before comparison. An
 // InterfaceValue's outer TypeName does not participate in equality: only the
 // inner concrete value matters.
+//
+// Floats compare structurally, not by IEEE semantics: NaN equals NaN (and a
+// complex value with NaN parts equals its bitwise twin). Anything else would
+// make a value unequal to itself and report phantom differences when a stream
+// is diffed against an identical copy.
 func Equal(a, b Value) bool {
 	if iv, ok := a.(InterfaceValue); ok {
 		a = iv.Value
@@ -38,10 +44,10 @@ func Equal(a, b Value) bool {
 		return ok && av.V == bv.V
 	case FloatValue:
 		bv, ok := b.(FloatValue)
-		return ok && av.V == bv.V
+		return ok && floatEq(av.V, bv.V)
 	case ComplexValue:
 		bv, ok := b.(ComplexValue)
-		return ok && av.Real == bv.Real && av.Imag == bv.Imag
+		return ok && floatEq(av.Real, bv.Real) && floatEq(av.Imag, bv.Imag)
 	case StringValue:
 		bv, ok := b.(StringValue)
 		return ok && av.V == bv.V
@@ -126,13 +132,16 @@ func Equal(a, b Value) bool {
 
 // Total ordering across Value kinds:
 //
-//	NilValue < BoolValue < IntValue/UintValue/FloatValue < StringValue < BytesValue < OpaqueValue < everything else
+//	NilValue < BoolValue < IntValue/UintValue/FloatValue < ComplexValue < StringValue < BytesValue < OpaqueValue < everything else
 
 // CompareValues returns -1, 0, or +1 ordering a before, equal to, or after b.
 // InterfaceValue is unwrapped from both sides before dispatch.
 // Same-kind numerics: Int vs Int uses int64, Uint vs Uint uses uint64.
 // Cross-numeric comparisons use float64; large integer values near the limits
 // of float64 precision may not compare correctly.
+// Floats order per [cmp.Compare]: NaN sorts below every other value and
+// equals itself, keeping the ordering total. Complex values order by real
+// part, then imaginary part.
 // Composite types (struct, map, slice, array) fall back to [Format] output.
 func CompareValues(a, b Value) int {
 	if iv, ok := a.(InterfaceValue); ok {
@@ -185,6 +194,13 @@ func CompareValues(a, b Value) int {
 			return cmpFloat(av.V, float64(bv.V))
 		}
 
+	case ComplexValue:
+		bv := b.(ComplexValue)
+		if c := cmpFloat(av.Real, bv.Real); c != 0 {
+			return c
+		}
+		return cmpFloat(av.Imag, bv.Imag)
+
 	case StringValue:
 		bv := b.(StringValue)
 		return cmpInt(strings.Compare(av.V, bv.V), 0)
@@ -230,14 +246,16 @@ func kindOrder(v Value) int {
 		return 1
 	case IntValue, UintValue, FloatValue:
 		return 2
-	case StringValue:
+	case ComplexValue:
 		return 3
-	case BytesValue:
+	case StringValue:
 		return 4
-	case OpaqueValue:
+	case BytesValue:
 		return 5
-	default:
+	case OpaqueValue:
 		return 6
+	default:
+		return 7
 	}
 }
 
@@ -285,12 +303,14 @@ func cmpU64(a, b uint64) int {
 	return 0
 }
 
+// cmpFloat orders floats totally: NaN sorts below every other value and
+// equals itself. A comparator where NaN equals everything (as a<b/a>b tests
+// would report) is intransitive and corrupts sort orderings built on it.
 func cmpFloat(a, b float64) int {
-	if a < b {
-		return -1
-	}
-	if a > b {
-		return 1
-	}
-	return 0
+	return cmp.Compare(a, b)
+}
+
+// floatEq is structural float equality: NaN equals NaN.
+func floatEq(a, b float64) bool {
+	return a == b || (a != a && b != b)
 }

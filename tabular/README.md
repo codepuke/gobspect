@@ -89,7 +89,7 @@ type HeterogeneousMode int
 const (
     HeterogeneousFirstWins  HeterogeneousMode = iota // silently drop rows of a different type (default)
     HeterogeneousReject                              // return an error on type change
-    HeterogeneousUnion                               // grow the header to include new columns
+    HeterogeneousUnion                               // one rectangular table with the union of all columns (buffered)
     HeterogeneousPartition                           // emit a blank line + new header on type change
 )
 ```
@@ -110,12 +110,11 @@ tp := tabular.NewPrinter(&buf, tabular.WithHeterogeneousMode(mode))
 
 ### union mode
 
-`HeterogeneousUnion` grows the header whenever a row introduces a column that has not been seen before. Rows already written cannot be backfilled; they have empty cells for the new columns.
+`HeterogeneousUnion` emits one rectangular table whose header is the union of every row's columns, in first-appearance order. Each row is padded with empty cells for the columns its own type lacks. Because the full column set is not known until the final row, union mode buffers all rows and writes them on `Flush` (the other modes stream row-by-row).
 
 ```
-Name,Score
-alice,42
-Name,Score,Rank   ← re-emitted header after column added
+Name,Score,Rank
+alice,42,
 bob,17,3
 ```
 

@@ -83,8 +83,21 @@ Query expressions use dot-separated field names in the spirit of jq. A leading `
 | `-min PATH` | `""` | Minimum of a numeric path over the matches |
 | `-max PATH` | `""` | Maximum of a numeric path over the matches |
 | `-avg PATH` | `""` | Average of a numeric path over the matches |
+| `-nonfinite` | `strings` | JSON rendering of non-finite floats (NaN, ±Inf): `strings` (`"NaN"`, `"+Inf"`, `"-Inf"`) or `null`; `json`/`jsonl` only |
 
 Color is enabled automatically when stdout is a terminal and disabled when piping or redirecting.
+
+`-count`/`-sum`/`-min`/`-max`/`-avg` are mutually exclusive and select an
+aggregation mode; `-sum`/`-min`/`-max` keep full `int64`/`uint64` precision,
+degrading to floating point only when a float value appears or an accumulator
+overflows. Flags that would be ignored by the selected mode — for example
+`-format csv` with `-stats`, or `-schema` combined with `-diff` — are rejected
+with a usage error (exit 2) rather than silently dropped. `-h`/`-help` prints
+usage to stdout and exits 0.
+
+Gzip input is detected by content, not filename: a gzipped file passed to
+`-f`/`-diff` is decompressed regardless of its extension, matching the stdin
+behavior.
 
 ## Query syntax
 
@@ -226,7 +239,7 @@ B5,4.50
 |------|----------|
 | `first` | Silently skip rows whose type differs from the first row's type |
 | `reject` | Return an error on any type mismatch |
-| `union` | Grow the header when new columns appear; earlier rows get empty cells for the new columns |
+| `union` | Emit one rectangular table with the union of all columns; every row gets empty cells for columns its type lacks. Rows are buffered until the stream ends (the other modes stream row-by-row) |
 | `partition` | Emit a blank line and a new header when the type changes |
 
 Field projections are always accepted regardless of source type, so `.ID,Customer` works across any struct that has those fields.

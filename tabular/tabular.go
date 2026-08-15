@@ -25,8 +25,10 @@ const (
 	// arrives after the schema has been locked.
 	HeterogeneousReject
 
-	// HeterogeneousUnion grows the header when new columns appear. Rows already
-	// printed cannot be backfilled; they receive empty cells for new columns.
+	// HeterogeneousUnion collects the union of all column names and emits one
+	// rectangular table: every row receives empty cells for columns its type
+	// lacks. Because the final column set is unknown until the last row, union
+	// output is buffered and written on [Printer.Flush] rather than streamed.
 	HeterogeneousUnion
 
 	// HeterogeneousPartition emits a blank line followed by a new header row
@@ -99,24 +101,31 @@ func WithStream(s *gobspect.Stream) Option {
 // empty strings so every row has the same column count as the header.
 //
 // The behavior when structs of a different type arrive is controlled by
-// [HeterogeneousMode].
+// [HeterogeneousMode]. Note that [HeterogeneousUnion] buffers all rows and
+// writes them on [Printer.Flush], because the full column set is not known
+// until the last row; the other modes stream row-by-row.
 type Printer struct {
-	w         *csv.Writer
-	rawWriter io.Writer
-	stream    *gobspect.Stream
-	noHeaders bool
+	w          *csv.Writer
+	rawWriter  io.Writer
+	stream     *gobspect.Stream
+	noHeaders  bool
 	headerDone bool
-	headers   []string
+	headers    []string
 
 	heteroMode   HeterogeneousMode
 	lockedTypeID int
 	hasLock      bool
 	lockedName   string
+	lockedScalar bool // table locked to single-column scalar rows
 
 	projMode    bool
 	rowCount    int
 	bytesFormat gobspect.BytesFormat
 	maxBytes    int
+
+	// HeterogeneousUnion state: rows buffered until Flush, keyed by column.
+	headerSet map[string]bool
+	unionRows []map[string]string
 }
 
 // NewPrinter creates a Printer that writes to out.
@@ -137,7 +146,12 @@ func NewPrinter(out io.Writer, opts ...Option) *Printer {
 
 // cellString converts a single Value to a flat string for a CSV cell,
 // respecting the printer's configured bytes format and truncation limit.
+// Interface wrappers are unwrapped here so that a []byte behind an `any`
+// field still honors the configured format.
 func (p *Printer) cellString(v gobspect.Value) string {
+	if iv, ok := v.(gobspect.InterfaceValue); ok {
+		return p.cellString(iv.Value)
+	}
 	if bv, ok := v.(gobspect.BytesValue); ok {
 		return gobspect.FormatBytes(bv.V, p.bytesFormat, p.maxBytes)
 	}
@@ -176,6 +190,16 @@ func (p *Printer) writeStructRow(sv gobspect.StructValue) error {
 		return p.w.Write(p.cellStrings(sv.Fields))
 	}
 
+	if p.heteroMode == HeterogeneousUnion {
+		p.addColumns(p.canonicalHeaders(sv))
+		cells := make(map[string]string, len(sv.Fields))
+		for _, f := range sv.Fields {
+			cells[f.Name] = p.cellString(f.Value)
+		}
+		p.unionRows = append(p.unionRows, cells)
+		return nil
+	}
+
 	if !p.headerDone {
 		p.headerDone = true
 		p.hasLock = true
@@ -191,7 +215,7 @@ func (p *Printer) writeStructRow(sv gobspect.StructValue) error {
 		return p.w.Write(p.sparseRow(sv))
 	}
 
-	if p.hasLock && sv.GobTypeID != 0 && sv.GobTypeID != p.lockedTypeID {
+	if p.hasLock && (p.lockedScalar || (sv.GobTypeID != 0 && sv.GobTypeID != p.lockedTypeID)) {
 		incomingName := p.typeName(sv.GobTypeID, sv.TypeName)
 		switch p.heteroMode {
 		case HeterogeneousFirstWins:
@@ -201,15 +225,12 @@ func (p *Printer) writeStructRow(sv gobspect.StructValue) error {
 			return fmt.Errorf("row %d has type %q but table is locked to %q; use a field projection like '.Items.*.Field1,Field2' to unify columns",
 				p.rowCount, incomingName, p.lockedName)
 
-		case HeterogeneousUnion:
-			p.growHeaders(sv)
-			return p.w.Write(p.sparseRow(sv))
-
 		case HeterogeneousPartition:
 			p.w.Flush()
 			fmt.Fprintln(p.rawWriter)
 			p.lockedTypeID = sv.GobTypeID
 			p.lockedName = incomingName
+			p.lockedScalar = false
 			p.headers = p.canonicalHeaders(sv)
 			if !p.noHeaders {
 				if err := p.w.Write(p.headers); err != nil {
@@ -223,24 +244,20 @@ func (p *Printer) writeStructRow(sv gobspect.StructValue) error {
 	return p.w.Write(p.sparseRow(sv))
 }
 
-// growHeaders extends p.headers with any field names in sv not already present.
-// Used by HeterogeneousUnion.
-func (p *Printer) growHeaders(sv gobspect.StructValue) {
-	existing := make(map[string]bool, len(p.headers))
-	for _, h := range p.headers {
-		existing[h] = true
-	}
-	newCols := p.canonicalHeaders(sv)
-	added := false
-	for _, name := range newCols {
-		if !existing[name] {
-			p.headers = append(p.headers, name)
-			existing[name] = true
-			added = true
+// addColumns extends p.headers with any names not already present, in first-
+// appearance order. Used by HeterogeneousUnion.
+func (p *Printer) addColumns(cols []string) {
+	if p.headerSet == nil {
+		p.headerSet = make(map[string]bool, len(p.headers)+len(cols))
+		for _, h := range p.headers {
+			p.headerSet[h] = true
 		}
 	}
-	if added && !p.noHeaders {
-		_ = p.w.Write(p.headers)
+	for _, name := range cols {
+		if !p.headerSet[name] {
+			p.headerSet[name] = true
+			p.headers = append(p.headers, name)
+		}
 	}
 }
 
@@ -285,22 +302,81 @@ func (p *Printer) sparseRow(sv gobspect.StructValue) []string {
 	return row
 }
 
-// writeScalarRow writes a single-column row for non-struct values.
+// writeScalarRow writes a single-column "value" row for non-struct values.
+// Scalar rows participate in heterogeneous-mode handling like any other row
+// type: mixing them into a struct-locked table would otherwise produce
+// ragged output that encoding/csv consumers reject.
 func (p *Printer) writeScalarRow(v gobspect.Value) error {
 	p.rowCount++
+
+	if p.heteroMode == HeterogeneousUnion {
+		p.addColumns([]string{"value"})
+		p.unionRows = append(p.unionRows, map[string]string{"value": p.cellString(v)})
+		return nil
+	}
+
 	if !p.headerDone {
 		p.headerDone = true
+		p.hasLock = true
+		p.lockedScalar = true
+		p.lockedName = "(scalar)"
+		p.headers = []string{"value"}
 		if !p.noHeaders {
-			if err := p.w.Write([]string{"value"}); err != nil {
+			if err := p.w.Write(p.headers); err != nil {
 				return err
 			}
 		}
+		return p.w.Write([]string{p.cellString(v)})
 	}
+
+	if p.hasLock && !p.lockedScalar {
+		switch p.heteroMode {
+		case HeterogeneousFirstWins:
+			return nil
+
+		case HeterogeneousReject:
+			return fmt.Errorf("row %d is a scalar but table is locked to %q; use a field projection to unify columns",
+				p.rowCount, p.lockedName)
+
+		case HeterogeneousPartition:
+			p.w.Flush()
+			fmt.Fprintln(p.rawWriter)
+			p.lockedScalar = true
+			p.lockedTypeID = 0
+			p.lockedName = "(scalar)"
+			p.headers = []string{"value"}
+			if !p.noHeaders {
+				if err := p.w.Write(p.headers); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	return p.w.Write([]string{p.cellString(v)})
 }
 
-// Flush flushes the underlying CSV writer and returns any write error.
+// Flush writes any rows buffered by [HeterogeneousUnion] as one rectangular
+// table, then flushes the underlying CSV writer and returns any write error.
 func (p *Printer) Flush() error {
+	if len(p.unionRows) > 0 {
+		if !p.noHeaders && !p.headerDone {
+			p.headerDone = true
+			if err := p.w.Write(p.headers); err != nil {
+				return err
+			}
+		}
+		for _, cells := range p.unionRows {
+			row := make([]string, len(p.headers))
+			for i, h := range p.headers {
+				row[i] = cells[h]
+			}
+			if err := p.w.Write(row); err != nil {
+				return err
+			}
+		}
+		p.unionRows = nil
+	}
 	p.w.Flush()
 	return p.w.Error()
 }
@@ -339,10 +415,13 @@ func CellString(v gobspect.Value) string {
 	case gobspect.FloatValue:
 		return fmt.Sprintf("%g", v.V)
 	case gobspect.ComplexValue:
-		if v.Imag >= 0 {
-			return fmt.Sprintf("(%g+%gi)", v.Real, v.Imag)
+		// %g already carries a sign for -x and ±Inf; only prefix '+' when
+		// the rendered imaginary part has none (matches gobspect.Format).
+		im := fmt.Sprintf("%g", v.Imag)
+		if im[0] != '+' && im[0] != '-' {
+			im = "+" + im
 		}
-		return fmt.Sprintf("(%g%gi)", v.Real, v.Imag)
+		return fmt.Sprintf("(%g%si)", v.Real, im)
 	case gobspect.BoolValue:
 		if v.V {
 			return "true"

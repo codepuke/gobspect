@@ -29,8 +29,8 @@ func TestNamedDescentExhaustive(t *testing.T) {
 		// m := map[string]map[string]int{"Name": {"Name": 42}}
 		inner := makeMap(entry(makeString("Name"), makeInt(42)))
 		root := makeMap(entry(makeString("Name"), inner))
-		
-		// Expected: 
+
+		// Expected:
 		// 1. stepField(root, "Name") finds 'inner' -> allWalk(inner, rest) returns [inner] (if rest is empty)
 		//    Wait, the query is "..Name". so rest is empty.
 		//    So it finds 'inner'.
@@ -39,7 +39,7 @@ func TestNamedDescentExhaustive(t *testing.T) {
 		//    a. stepField(inner, "Name") finds 42.
 		//    b. descendAll(inner) returns [42]. Recurse: allWalk(42, "..Name") -> returns nil.
 		// So results should be [inner, 42].
-		
+
 		got := All(root, "..Name")
 		require.Len(t, got, 2)
 		assert.Equal(t, inner, got[0], "outer value first (pre-order)")

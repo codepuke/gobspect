@@ -121,11 +121,6 @@ type simpleGobEncoder struct{ payload string }
 func (e *simpleGobEncoder) GobEncode() ([]byte, error) { return []byte(e.payload), nil }
 func (e *simpleGobEncoder) GobDecode(b []byte) error   { e.payload = string(b); return nil }
 
-func encodeGobEncoderDirect(tb testing.TB, payload string) *gobspect.Inspector {
-	tb.Helper()
-	return nil // just a placeholder — we use gobEncode from decode_test.go
-}
-
 func TestAnonymousDecoders_TriedInOrder(t *testing.T) {
 	// Register two anonymous decoders; the first errors, the second succeeds.
 	// Expect the second decoder's result to be used.

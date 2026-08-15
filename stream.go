@@ -1,6 +1,7 @@
 package gobspect
 
 import (
+	"fmt"
 	"io"
 	"iter"
 )
@@ -47,27 +48,57 @@ func (s *Stream) drainSeq() iter.Seq2[Value, error] {
 				yield(nil, s.sd.wrapErr(err))
 				return
 			}
-			if rawID < 0 {
-				if err := s.sd.processTypeDef(int(-rawID), msgR); err != nil {
-					yield(nil, s.sd.wrapErr(err))
+			// Process type definitions at the front of the message. The wire
+			// grammar allows a message to pack several definitions and an
+			// optional trailing value, though the stdlib encoder emits one
+			// definition per message.
+			hasValue := true
+			for rawID < 0 {
+				id, defErr := typeDefID(rawID)
+				if defErr == nil {
+					defErr = s.sd.processTypeDef(id, msgR)
+				}
+				if defErr != nil {
+					yield(nil, s.sd.wrapErr(defErr))
 					return
 				}
-				s.sd.advanceMessage()
-			} else {
-				v, err := s.vd.decodeTopLevelValue(int(rawID), &messageReader{cur: msgR})
+				if msgR.Len() == 0 {
+					hasValue = false
+					break
+				}
+				rawID, err = decodeInt(msgR)
 				if err != nil {
-					if s.skipCorrupt {
-						s.skipCount++
-						s.sd.advanceMessage()
-						continue
-					}
-					yield(nil, s.sd.wrapErr(err))
+					yield(nil, s.sd.wrapErr(fmt.Errorf("gob: reading type ID: %w", err)))
 					return
 				}
+			}
+			if !hasValue {
 				s.sd.advanceMessage()
-				if !yield(v, nil) {
-					return
+				continue
+			}
+			// Interface fields may pull in continuation messages, moving the
+			// decoder's message cursor; remember this message's position so
+			// errors cite the value message the user can actually find.
+			valueIdx, valueStart := s.sd.msgIdx, s.sd.msgStart
+			mr := &messageReader{cur: msgR}
+			v, err := s.vd.decodeTopLevelValue(int(rawID), mr)
+			if err == nil {
+				if rem := srcRemaining(mr); rem > 0 {
+					err = fmt.Errorf("gob: %d trailing bytes after value", rem)
 				}
+			}
+			if err != nil {
+				if s.skipCorrupt {
+					s.skipCount++
+					s.sd.advanceMessage()
+					continue
+				}
+				yield(nil, s.sd.wrapErrAt(valueIdx, valueStart, err))
+				return
+			}
+			s.sd.advanceMessage()
+			if !yield(v, nil) {
+				return
 			}
 		}
 	}

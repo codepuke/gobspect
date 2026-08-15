@@ -33,26 +33,26 @@ func TestFlagValidation(t *testing.T) {
 		{
 			name:       "schema with query",
 			args:       []string{"-schema", "-f", tmpFile.Name(), ".Foo"},
-			wantExit:   0, // Warn and continue
-			wantStderr: []string{"gq: query expression has no effect with -schema; ignoring"},
+			wantExit:   2,
+			wantStderr: []string{"gq: query expression has no effect with -schema"},
 		},
 		{
 			name:       "types with query",
 			args:       []string{"-types", "-f", tmpFile.Name(), ".Foo"},
-			wantExit:   0, // Warn and continue
-			wantStderr: []string{"gq: query expression has no effect with -types; ignoring"},
+			wantExit:   2,
+			wantStderr: []string{"gq: query expression has no effect with -types"},
 		},
 		{
 			name:       "schema with format json",
 			args:       []string{"-schema", "-format", "json", "-f", tmpFile.Name()},
-			wantExit:   0,
-			wantStderr: []string{"gq: -format json has no effect with -schema; ignoring"},
+			wantExit:   2,
+			wantStderr: []string{"gq: -format has no effect with -schema"},
 		},
 		{
 			name:       "schema with index",
 			args:       []string{"-schema", "-index", "0", "-f", tmpFile.Name()},
-			wantExit:   0,
-			wantStderr: []string{"gq: -index has no effect with -schema; ignoring"},
+			wantExit:   2,
+			wantStderr: []string{"gq: -index has no effect with -schema"},
 		},
 		{
 			name:       "color and no-color",
@@ -63,68 +63,122 @@ func TestFlagValidation(t *testing.T) {
 		{
 			name:       "compact with csv",
 			args:       []string{"-compact", "-format", "csv", "-f", tmpFile.Name()},
-			wantExit:   0,
-			wantStderr: []string{"gq: -compact has no effect with -format csv; ignoring"},
+			wantExit:   2,
+			wantStderr: []string{"gq: -compact has no effect with -format csv"},
 		},
 		{
 			name:       "raw with json",
 			args:       []string{"-r", "-format", "json", "-f", tmpFile.Name()},
-			wantExit:   0,
-			wantStderr: []string{"gq: -r has no effect with -format json; ignoring"},
-		},
-		{
-			name:       "raw with csv",
-			args:       []string{"-r", "-format", "csv", "-f", tmpFile.Name()},
-			wantExit:   0,
-			wantStderr: []string{"gq: -r has no effect with -format csv; ignoring"},
-		},
-		{
-			name:       "types with format json",
-			args:       []string{"-types", "-format", "json", "-f", tmpFile.Name()},
-			wantExit:   0,
-			wantStderr: []string{"gq: -format json has no effect with -types; ignoring"},
-		},
-		{
-			name:       "types with index",
-			args:       []string{"-types", "-index", "0", "-f", tmpFile.Name()},
-			wantExit:   0,
-			wantStderr: []string{"gq: -index has no effect with -types; ignoring"},
-		},
-		{
-			name:       "schema with sort",
-			args:       []string{"-schema", "-sort", "Name", "-f", tmpFile.Name()},
-			wantExit:   0,
-			wantStderr: []string{"gq: -sort has no effect with -schema; ignoring"},
+			wantExit:   2,
+			wantStderr: []string{"gq: -r has no effect with -format json"},
 		},
 		{
 			name:       "types with sort",
 			args:       []string{"-types", "-sort", "Name", "-f", tmpFile.Name()},
-			wantExit:   0,
-			wantStderr: []string{"gq: -sort has no effect with -types; ignoring"},
-		},
-		{
-			name:       "schema with null-on-miss",
-			args:       []string{"-schema", "-null-on-miss", "-f", tmpFile.Name()},
-			wantExit:   0,
-			wantStderr: []string{"gq: -null-on-miss has no effect with -schema; ignoring"},
-		},
-		{
-			name:       "types with null-on-miss",
-			args:       []string{"-types", "-null-on-miss", "-f", tmpFile.Name()},
-			wantExit:   0,
-			wantStderr: []string{"gq: -null-on-miss has no effect with -types; ignoring"},
+			wantExit:   2,
+			wantStderr: []string{"gq: -sort has no effect with -types"},
 		},
 		{
 			name:       "schema with time-format",
 			args:       []string{"-schema", "-time-format", "2006-01-02", "-f", tmpFile.Name()},
-			wantExit:   0,
-			wantStderr: []string{"gq: -time-format has no effect with -schema; ignoring"},
+			wantExit:   2,
+			wantStderr: []string{"gq: -time-format has no effect with -schema"},
 		},
 		{
-			name:       "types with time-format",
-			args:       []string{"-types", "-time-format", "2006-01-02", "-f", tmpFile.Name()},
-			wantExit:   0,
-			wantStderr: []string{"gq: -time-format has no effect with -types; ignoring"},
+			name:       "conflicting aggregation flags",
+			args:       []string{"-count", "-sum", "Score", "-f", tmpFile.Name()},
+			wantExit:   2,
+			wantStderr: []string{"gq: aggregation flags -count, -sum are mutually exclusive"},
+		},
+		{
+			name:       "min and max together",
+			args:       []string{"-min", "X", "-max", "Y", "-f", tmpFile.Name()},
+			wantExit:   2,
+			wantStderr: []string{"gq: aggregation flags -min, -max are mutually exclusive"},
+		},
+		{
+			name:       "diff with schema",
+			args:       []string{"-diff", "other.gob", "-schema", "-f", tmpFile.Name()},
+			wantExit:   2,
+			wantStderr: []string{"select conflicting modes; use one"},
+		},
+		{
+			name:       "stats with count",
+			args:       []string{"-stats", "-count", "-f", tmpFile.Name()},
+			wantExit:   2,
+			wantStderr: []string{"select conflicting modes; use one"},
+		},
+		{
+			name:       "stats with csv format",
+			args:       []string{"-stats", "-format", "csv", "-f", tmpFile.Name()},
+			wantExit:   2,
+			wantStderr: []string{"gq: -format csv is not supported with -stats; use pretty or json"},
+		},
+		{
+			name:       "diff with tsv format",
+			args:       []string{"-diff", "other.gob", "-format", "tsv", "-f", tmpFile.Name()},
+			wantExit:   2,
+			wantStderr: []string{"gq: -format tsv is not supported with -diff; use pretty, json, or jsonl"},
+		},
+		{
+			name:       "diff with limit",
+			args:       []string{"-diff", "other.gob", "-limit", "3", "-f", tmpFile.Name()},
+			wantExit:   2,
+			wantStderr: []string{"gq: -limit has no effect with -diff"},
+		},
+		{
+			name:       "stats with sort",
+			args:       []string{"-stats", "-sort", "Name", "-f", tmpFile.Name()},
+			wantExit:   2,
+			wantStderr: []string{"gq: -sort has no effect with -stats"},
+		},
+		{
+			name:       "aggregate with index",
+			args:       []string{"-sum", "Score", "-index", "0", "-f", tmpFile.Name()},
+			wantExit:   2,
+			wantStderr: []string{"gq: -index has no effect with -sum"},
+		},
+		{
+			name:       "sort-desc without sort",
+			args:       []string{"-sort-desc", "-f", tmpFile.Name()},
+			wantExit:   2,
+			wantStderr: []string{"gq: -sort-desc has no effect without -sort"},
+		},
+		{
+			name:       "schema-format without schema",
+			args:       []string{"-schema-format", "json", "-f", tmpFile.Name()},
+			wantExit:   2,
+			wantStderr: []string{"gq: -schema-format has no effect without -schema"},
+		},
+		{
+			name:       "negative max-bytes",
+			args:       []string{"-max-bytes", "-1", "-f", tmpFile.Name()},
+			wantExit:   2,
+			wantStderr: []string{"gq: -max-bytes must be non-negative"},
+		},
+		{
+			name:       "bad nonfinite value",
+			args:       []string{"-nonfinite", "nan", "-f", tmpFile.Name()},
+			wantExit:   2,
+			wantStderr: []string{`gq: unknown -nonfinite value "nan"; use strings or null`},
+		},
+		{
+			name:       "nonfinite with pretty format",
+			args:       []string{"-nonfinite", "null", "-f", tmpFile.Name()},
+			wantExit:   2,
+			wantStderr: []string{"gq: -nonfinite has no effect with -format pretty"},
+		},
+		{
+			name:         "stats with json format is allowed",
+			args:         []string{"-stats", "-format", "json", "-f", tmpFile.Name()},
+			wantExit:     0,
+			wantNoStderr: []string{"has no effect", "not supported"},
+		},
+		{
+			name:         "aggregate with query is allowed",
+			args:         []string{"-count", "-f", tmpFile.Name(), ".Foo"},
+			wantExit:     0,
+			wantNoStderr: []string{"has no effect"},
 		},
 	}
 
@@ -141,6 +195,11 @@ func TestFlagValidation(t *testing.T) {
 			for _, want := range tt.wantStderr {
 				if !strings.Contains(stderrStr, want) {
 					t.Errorf("stderr does not contain %q\nGot:\n%s", want, stderrStr)
+				}
+			}
+			for _, unwant := range tt.wantNoStderr {
+				if strings.Contains(stderrStr, unwant) {
+					t.Errorf("stderr unexpectedly contains %q\nGot:\n%s", unwant, stderrStr)
 				}
 			}
 		})
@@ -179,7 +238,7 @@ func TestPrintValue_ColorProducesANSI(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := printValue(vals[0], &out, "pretty", false, false, true /* color */, fmtOpts); err != nil {
+	if err := printValue(vals[0], &out, "pretty", false, false, true /* color */, fmtOpts, nil); err != nil {
 		t.Fatalf("printValue: %v", err)
 	}
 

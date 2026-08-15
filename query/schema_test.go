@@ -45,7 +45,7 @@ func TestSchemaAt(t *testing.T) {
 		{"Tags.promo", "string", false}, // Tags is map[string]string
 		{"Missing", "", true},
 		{"Items.0.Missing", "", true},
-		{"ID.0", "", true},       // cannot index int
+		{"ID.0", "", true}, // cannot index int
 		// descent collects every reachable Items field; Order.Tags is a
 		// map[string]string, so its value type "string" also enters the union
 		// because any string key could in principle be "Items" at runtime.
@@ -299,8 +299,8 @@ func TestSchemaAt_NonStringMapKeyRejectsField(t *testing.T) {
 				},
 			},
 			{
-				Name: "NamedSlice",
-				Kind: gobspect.KindSlice,
+				Name:       "NamedSlice",
+				Kind:       gobspect.KindSlice,
 				TargetType: "[]int",
 			},
 		},
@@ -426,4 +426,81 @@ func TestSchemaAt_MapProjection(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "cannot navigate field")
 	})
+}
+
+// TestSchemaAt_WildcardDescent verifies that filters following a wildcard
+// descend ("..[Filter]") act as type-preserving predicates: the result is the
+// type of the nodes that could pass the filter, not their element type.
+func TestSchemaAt_WildcardDescent(t *testing.T) {
+	schema := &gobspect.Schema{
+		Types: []gobspect.TypeDecl{
+			{
+				Name: "Root",
+				Kind: gobspect.KindStruct,
+				Fields: []gobspect.FieldDecl{
+					{Name: "Resources", Type: "[]Resource"},
+				},
+			},
+			{
+				Name: "Resource",
+				Kind: gobspect.KindStruct,
+				Fields: []gobspect.FieldDecl{
+					{Name: "Status", Type: "string"},
+					{Name: "Tags", Type: "[]string"},
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name    string
+		expr    string
+		want    string
+		wantErr bool
+	}{
+		{name: "filter_after_descend", expr: "..[Status=active]", want: "Resource"},
+		{name: "wildcard_then_descend_filter", expr: "Resources.*..[Status=active]", want: "Resource"},
+		{name: "chained_predicate_filters", expr: "..[Tags~devops][Status=active]", want: "Resource"},
+		{name: "or_group_predicate", expr: "..[Status=active]|[Missing!]", want: "Resource"},
+		{name: "predicate_then_field", expr: "..[Status=active].Status", want: "string"},
+		{name: "numeric_predicate", expr: "..[Status==5]", want: "Resource"},
+		{name: "not_exist_keeps_all_reachable", expr: "..[Nope!!]", want: "Resource|Root|[]Resource|[]string|string"},
+		{name: "no_type_can_match", expr: "..[Nope=x]", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := query.Parse(tt.expr)
+			require.NoError(t, err)
+			got, err := query.SchemaAt(schema, "Root", p)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestSchemaAt_WildcardDescentMapCandidate verifies that string-keyed map
+// types survive a predicate filter (any runtime key could match the field
+// name), while non-string-keyed maps do not.
+func TestSchemaAt_WildcardDescentMapCandidate(t *testing.T) {
+	schema := &gobspect.Schema{
+		Types: []gobspect.TypeDecl{
+			{
+				Name: "Root",
+				Kind: gobspect.KindStruct,
+				Fields: []gobspect.FieldDecl{
+					{Name: "Meta", Type: "map[string]string"},
+					{Name: "Counts", Type: "map[int]int"},
+				},
+			},
+		},
+	}
+	p, err := query.Parse("..[Whatever=x]")
+	require.NoError(t, err)
+	got, err := query.SchemaAt(schema, "Root", p)
+	require.NoError(t, err)
+	assert.Equal(t, "map[string]string", got)
 }

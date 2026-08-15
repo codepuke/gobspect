@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 )
 
 // countingReader wraps a byteReadReader and tracks the total number of bytes
@@ -136,21 +137,37 @@ type byteReadReader interface {
 
 // streamDecoder holds per-stream state: the type registry and the source reader.
 type streamDecoder struct {
-	r        *countingReader
-	registry map[int]wireTypeDef // type ID → wireTypeDef
-	types    []TypeInfo          // accumulated in definition order
-	byID     map[int]int         // type ID → index in types
-	msgIdx   int                 // 0-based counter of messages fully read
-	msgStart int64               // byte offset of the current (or next) message start
-	msgLen   int                 // body length of the current message
+	r           *countingReader
+	registry    map[int]wireTypeDef // type ID → wireTypeDef
+	types       []TypeInfo          // accumulated in definition order
+	byID        map[int]int         // type ID → index in types
+	pendingRefs map[int][]*TypeRef  // type ID → refs awaiting that ID's name
+	msgIdx      int                 // 0-based counter of messages fully read
+	msgStart    int64               // byte offset of the current (or next) message start
+	msgLen      int                 // body length of the current message
 }
 
 func newStreamDecoder(r *countingReader) *streamDecoder {
 	return &streamDecoder{
-		r:        r,
-		registry: make(map[int]wireTypeDef),
-		byID:     make(map[int]int),
+		r:           r,
+		registry:    make(map[int]wireTypeDef),
+		byID:        make(map[int]int),
+		pendingRefs: make(map[int][]*TypeRef),
 	}
+}
+
+// firstUserTypeID is the lowest type ID the gob encoder assigns to
+// user-defined types. Definitions below it would shadow builtin or
+// bootstrap types and are rejected, matching the stdlib decoder.
+const firstUserTypeID = 64
+
+// typeDefID converts the negated raw wire ID of a type definition to an int
+// type ID, guarding against the negation overflowing on math.MinInt64.
+func typeDefID(rawID int64) (int, error) {
+	if rawID == math.MinInt64 {
+		return 0, fmt.Errorf("gob: type definition ID %d out of range", rawID)
+	}
+	return int(-rawID), nil
 }
 
 // readMessage reads the next length-prefixed message from the stream.
@@ -164,6 +181,9 @@ func (sd *streamDecoder) readMessage() ([]byte, error) {
 	}
 	if n > 1<<26 {
 		return nil, fmt.Errorf("gob: message length %d exceeds sanity limit", n)
+	}
+	if sd.r.limit > 0 && int64(n) > sd.r.limit-sd.r.n {
+		return nil, fmt.Errorf("gob: message length %d exceeds MaxBytes limit of %d", n, sd.r.limit)
 	}
 	buf := make([]byte, n)
 	if _, err := io.ReadFull(sd.r, buf); err != nil {
@@ -194,7 +214,9 @@ func (sd *streamDecoder) nextRawMessage() (rawID int64, r *bytes.Reader, info Me
 	br := bytes.NewReader(buf)
 	rawID, err = decodeInt(br)
 	if err != nil {
-		return 0, nil, info, sd.wrapErr(fmt.Errorf("gob: reading type ID: %w", err))
+		// Not wrapped with message context here: callers wrap once at the
+		// point the error is surfaced, so it is not prefixed twice.
+		return 0, nil, info, fmt.Errorf("gob: reading type ID: %w", err)
 	}
 	info.TypeID = int(rawID)
 	return rawID, br, info, nil
@@ -209,10 +231,18 @@ func (sd *streamDecoder) advanceMessage() { sd.msgIdx++ }
 // wrapErr annotates err with the current message index and byte offset for
 // better diagnostics. Returns err unchanged when err is nil or io.EOF.
 func (sd *streamDecoder) wrapErr(err error) error {
+	return sd.wrapErrAt(sd.msgIdx, sd.msgStart, err)
+}
+
+// wrapErrAt is wrapErr with an explicit message index and offset, for callers
+// that must cite a message other than the current one — e.g. a value whose
+// interface fields pulled in continuation messages should still be reported
+// at the value message's own position.
+func (sd *streamDecoder) wrapErrAt(msgIdx int, msgStart int64, err error) error {
 	if err == nil || err == io.EOF {
 		return err
 	}
-	return fmt.Errorf("gob: message %d at offset %d: %w", sd.msgIdx, sd.msgStart, err)
+	return fmt.Errorf("gob: message %d at offset %d: %w", msgIdx, msgStart, err)
 }
 
 // processTypeDef decodes a wireType definition from the message body and
@@ -228,23 +258,31 @@ func (sd *streamDecoder) processTypeDef(id int, r io.ByteReader) error {
 // registerAndResolve registers a new type definition, converts it to TypeInfo,
 // back-fills TypeRef.Name for any existing types that reference this ID, and
 // records the index in byID for O(1) lookup.
+//
+// Definitions for reserved IDs (builtin and bootstrap types) and duplicate
+// definitions are rejected, matching the stdlib decoder: accepting either
+// would let a stream make TypeByID and Schema disagree with how values are
+// actually decoded.
 func (sd *streamDecoder) registerAndResolve(id int, def wireTypeDef) error {
+	if id < firstUserTypeID {
+		return fmt.Errorf("gob: type definition for reserved ID %d", id)
+	}
+	if _, dup := sd.registry[id]; dup {
+		return fmt.Errorf("gob: duplicate definition for type ID %d", id)
+	}
 	sd.registry[id] = def
 	ti, err := sd.wireTypeToTypeInfo(id, def)
 	if err != nil {
 		return fmt.Errorf("gob: converting wireType to TypeInfo for ID %d: %w", id, err)
 	}
-	// Back-fill existing TypeRefs that were waiting for this ID.
+	// Back-fill the TypeRefs that were waiting for this ID. Duplicate IDs are
+	// rejected above, so this is the only definition the waiters can ever get.
 	if name := wireTypeDefName(def); name != "" {
-		for i := range sd.types {
-			if sd.types[i].Key != nil && sd.types[i].Key.ID == id && sd.types[i].Key.Name == "" {
-				sd.types[i].Key.Name = name
-			}
-			if sd.types[i].Elem != nil && sd.types[i].Elem.ID == id && sd.types[i].Elem.Name == "" {
-				sd.types[i].Elem.Name = name
-			}
+		for _, ref := range sd.pendingRefs[id] {
+			ref.Name = name
 		}
 	}
+	delete(sd.pendingRefs, id)
 	sd.byID[id] = len(sd.types)
 	sd.types = append(sd.types, ti)
 	return nil
@@ -323,7 +361,9 @@ func (sd *streamDecoder) wireTypeToTypeInfo(id int, def wireTypeDef) (TypeInfo, 
 }
 
 // resolveRef creates a TypeRef for the given type ID, filling in the name
-// if the type is already known (builtin or previously defined).
+// if the type is already known (builtin or previously defined). Refs to
+// not-yet-defined IDs are indexed in pendingRefs so registerAndResolve can
+// fill the name in O(1) when the definition arrives.
 func (sd *streamDecoder) resolveRef(id int) *TypeRef {
 	ref := &TypeRef{ID: id}
 	if name, ok := builtinTypeName(id); ok {
@@ -332,7 +372,9 @@ func (sd *streamDecoder) resolveRef(id int) *TypeRef {
 	}
 	if def, ok := sd.registry[id]; ok {
 		ref.Name = wireTypeDefName(def)
+		return ref
 	}
+	sd.pendingRefs[id] = append(sd.pendingRefs[id], ref)
 	return ref
 }
 
@@ -379,4 +421,3 @@ func wireTypeDefName(def wireTypeDef) string {
 	}
 	return ""
 }
-

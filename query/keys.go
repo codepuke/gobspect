@@ -10,7 +10,9 @@ import (
 // KeysPath returns the navigable keys at the node resolved by p against root.
 //   - StructValue: field names in declaration order.
 //   - SliceValue/ArrayValue: index strings ("0", "1", …).
-//   - MapValue: string-coerced keys (only StringValue keys are included). Returns (nil, false) if the map is non-empty but has no string-typed keys.
+//   - MapValue: string-coerced keys (StringValue keys, unwrapping any
+//     InterfaceValue wrapper first). Returns (nil, false) if the map is
+//     non-empty but has no string-typed keys.
 //   - InterfaceValue: unwrapped before dispatch.
 //   - Scalar, OpaqueValue, NilValue: returns (nil, false).
 //
@@ -74,8 +76,8 @@ func keysOf(v gobspect.Value) ([]string, bool) {
 		}
 		var keys []string
 		for _, e := range n.Entries {
-			if sv, ok := e.Key.(gobspect.StringValue); ok {
-				keys = append(keys, sv.V)
+			if k, ok := keyString(e.Key); ok {
+				keys = append(keys, k)
 			}
 		}
 		if len(keys) == 0 {

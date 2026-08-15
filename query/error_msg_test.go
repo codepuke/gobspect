@@ -29,8 +29,8 @@ func TestSchemaAt_MisleadingErrors(t *testing.T) {
 				},
 			},
 			{
-				Name: "NamedSlice",
-				Kind: gobspect.KindSlice,
+				Name:       "NamedSlice",
+				Kind:       gobspect.KindSlice,
 				TargetType: "[]int",
 			},
 		},

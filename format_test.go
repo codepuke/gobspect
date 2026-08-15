@@ -184,9 +184,9 @@ func TestFormat_WithMaxBytes_PrintableUTF8(t *testing.T) {
 	for i := range large {
 		large[i] = 'A' // 'A' is printable UTF-8
 	}
-	
+
 	got := formatFirst(t, WrapBytes{V: large}, gobspect.WithMaxBytes(64))
-	
+
 	// Right now the length is likely > 1MiB because it's untruncated.
 	// The assertion should cap checking length instead of dumping a huge string.
 	assert.Less(t, len(got), 1024, "Output should be bounded and not render the entire 1 MiB slice")
@@ -201,11 +201,10 @@ func TestFormat_BytesNonPrintable(t *testing.T) {
 func TestFormat_EmptyBytes(t *testing.T) {
 	nilGot := gobspect.Format(gobspect.BytesValue{V: nil})
 	emptyGot := gobspect.Format(gobspect.BytesValue{V: []byte{}})
-	
+
 	assert.Equal(t, "[]", nilGot)
 	assert.Equal(t, "[]", emptyGot)
 }
-
 
 func TestFormat_EmptyStruct(t *testing.T) {
 	// Point{} has zero-valued fields; gob omits them, so Fields is empty.
@@ -1147,18 +1146,6 @@ func (w *limitWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// formatToFirst encodes v with encoding/gob, decodes with a fresh Inspector,
-// and calls FormatTo with the given writer and options on the single resulting Value.
-func formatToFirst(tb testing.TB, w *bytes.Buffer, v any, opts ...gobspect.FormatOption) error {
-	tb.Helper()
-	buf := gobEncode(tb, v)
-	ins := gobspect.New()
-	vals, err := ins.Stream(buf).Collect()
-	require.NoError(tb, err)
-	require.Len(tb, vals, 1)
-	return gobspect.FormatTo(w, vals[0], opts...)
-}
-
 // TestFormatTo_EquivalentToFormat verifies that FormatTo produces byte-identical
 // output to Format for all existing test cases.
 func TestFormatTo_EquivalentToFormat(t *testing.T) {
@@ -1168,27 +1155,27 @@ func TestFormatTo_EquivalentToFormat(t *testing.T) {
 		opts  []gobspect.FormatOption
 	}{
 		{
-			name: "bool_true",
+			name:  "bool_true",
 			value: func(tb testing.TB) gobspect.Value { return gobspect.BoolValue{V: true} },
 		},
 		{
-			name: "bool_false",
+			name:  "bool_false",
 			value: func(tb testing.TB) gobspect.Value { return gobspect.BoolValue{V: false} },
 		},
 		{
-			name: "int_value",
+			name:  "int_value",
 			value: func(tb testing.TB) gobspect.Value { return gobspect.IntValue{V: -42} },
 		},
 		{
-			name: "uint_value",
+			name:  "uint_value",
 			value: func(tb testing.TB) gobspect.Value { return gobspect.UintValue{V: 100} },
 		},
 		{
-			name: "float_integer_valued",
+			name:  "float_integer_valued",
 			value: func(tb testing.TB) gobspect.Value { return gobspect.FloatValue{V: 1.0} },
 		},
 		{
-			name: "float_pi",
+			name:  "float_pi",
 			value: func(tb testing.TB) gobspect.Value { return gobspect.FloatValue{V: math.Pi} },
 		},
 		{
@@ -1204,11 +1191,11 @@ func TestFormatTo_EquivalentToFormat(t *testing.T) {
 			},
 		},
 		{
-			name: "string_value",
+			name:  "string_value",
 			value: func(tb testing.TB) gobspect.Value { return gobspect.StringValue{V: "hello"} },
 		},
 		{
-			name: "bytes_empty",
+			name:  "bytes_empty",
 			value: func(tb testing.TB) gobspect.Value { return gobspect.BytesValue{V: nil} },
 		},
 		{
@@ -1224,7 +1211,7 @@ func TestFormatTo_EquivalentToFormat(t *testing.T) {
 			},
 		},
 		{
-			name: "nil_value",
+			name:  "nil_value",
 			value: func(tb testing.TB) gobspect.Value { return gobspect.NilValue{} },
 		},
 		{
@@ -1542,13 +1529,13 @@ func TestFormat_ANSIColor_Scalars(t *testing.T) {
 		value     gobspect.Value
 		wantStyle string // ANSI prefix expected to appear in output
 	}{
-		{"bool_true", gobspect.BoolValue{V: true}, "\x1b[36m"},  // cyan
+		{"bool_true", gobspect.BoolValue{V: true}, "\x1b[36m"},   // cyan
 		{"bool_false", gobspect.BoolValue{V: false}, "\x1b[36m"}, // cyan
 		{"int", gobspect.IntValue{V: -5}, "\x1b[35m"},            // magenta
 		{"uint", gobspect.UintValue{V: 9}, "\x1b[35m"},           // magenta
 		{"float", gobspect.FloatValue{V: 1.5}, "\x1b[35m"},       // magenta
 		{"string", gobspect.StringValue{V: "x"}, "\x1b[33m"},     // yellow
-		{"nil", gobspect.NilValue{}, "\x1b[36m"},                  // cyan
+		{"nil", gobspect.NilValue{}, "\x1b[36m"},                 // cyan
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

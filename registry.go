@@ -17,8 +17,10 @@ func registerBuiltins(ins *Inspector) {
 	ins.RegisterUnnamedDecoder(decodeBigAuto)
 
 	// uuid.UUID (github.com/google/uuid and github.com/gofrs/uuid).
-	// TypeName will be "uuid.UUID" when the type is encoded via an interface
-	// and registered with gob.Register.
+	// The gob wire CommonType.Name is the bare type name "UUID"
+	// (reflect.Type.Name(), no package qualifier — same as "Time" above).
+	// The qualified alias is kept for callers doing explicit lookups.
+	ins.decoders["UUID"] = decodeUUID
 	ins.decoders["uuid.UUID"] = decodeUUID
 
 	// math/big.Float: registered under a descriptive key for callers who know
@@ -27,14 +29,18 @@ func registerBuiltins(ins *Inspector) {
 	// auto-detection via this key is not possible without explicit registration.
 	ins.decoders["math/big.Float"] = decodeBigFloat
 
-	// shopspring/decimal.Decimal: two common import-path aliases are registered
-	// so callers can look up the decoder regardless of which alias is in use.
+	// shopspring/decimal.Decimal: the wire CommonType.Name is the bare
+	// "Decimal". The qualified aliases are kept for explicit lookups.
+	ins.decoders["Decimal"] = decodeShopspringDecimal
 	ins.decoders["decimal.Decimal"] = decodeShopspringDecimal
 	ins.decoders["shopspring/decimal.Decimal"] = decodeShopspringDecimal
 
-	// net/netip types (BinaryMarshaler). TypeName is the CommonType.Name
-	// the gob encoder produces for each type.
+	// net/netip types (BinaryMarshaler). The wire CommonType.Name is the
+	// bare type name; qualified aliases kept for explicit lookups.
+	ins.decoders["Addr"] = decodeNetipAddr
 	ins.decoders["netip.Addr"] = decodeNetipAddr
+	ins.decoders["Prefix"] = decodeNetipPrefix
 	ins.decoders["netip.Prefix"] = decodeNetipPrefix
+	ins.decoders["AddrPort"] = decodeNetipAddrPort
 	ins.decoders["netip.AddrPort"] = decodeNetipAddrPort
 }

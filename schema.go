@@ -277,12 +277,25 @@ func buildTypeDecl(ti TypeInfo, byID map[int]TypeInfo) TypeDecl {
 	return decl
 }
 
+// maxSchemaTypeDepth bounds the nesting of inline type expressions. A crafted
+// stream can define an anonymous composite type that references itself (there
+// is no cycle validation on type-ID references), which would otherwise recurse
+// without limit; legitimate anonymous nesting never comes close to this depth.
+const maxSchemaTypeDepth = 100
+
 // schemaTypeExpr returns the Go type expression for the type identified by ref.
 // For named types it returns the name. For anonymous composite types it
 // constructs an inline expression (e.g. "[]string", "map[string]int").
 func schemaTypeExpr(ref *TypeRef, byID map[int]TypeInfo) string {
+	return schemaTypeExprDepth(ref, byID, 0)
+}
+
+func schemaTypeExprDepth(ref *TypeRef, byID map[int]TypeInfo, depth int) string {
 	if ref == nil {
 		return "?"
+	}
+	if depth > maxSchemaTypeDepth {
+		return "…"
 	}
 	if name, ok := builtinTypeName(ref.ID); ok {
 		return name
@@ -300,11 +313,11 @@ func schemaTypeExpr(ref *TypeRef, byID map[int]TypeInfo) string {
 	// Anonymous composite: build inline expression.
 	switch ti.Kind {
 	case KindSlice:
-		return "[]" + schemaTypeExpr(ti.Elem, byID)
+		return "[]" + schemaTypeExprDepth(ti.Elem, byID, depth+1)
 	case KindArray:
-		return fmt.Sprintf("[%d]%s", ti.Len, schemaTypeExpr(ti.Elem, byID))
+		return fmt.Sprintf("[%d]%s", ti.Len, schemaTypeExprDepth(ti.Elem, byID, depth+1))
 	case KindMap:
-		return "map[" + schemaTypeExpr(ti.Key, byID) + "]" + schemaTypeExpr(ti.Elem, byID)
+		return "map[" + schemaTypeExprDepth(ti.Key, byID, depth+1) + "]" + schemaTypeExprDepth(ti.Elem, byID, depth+1)
 	default:
 		if ref.Name != "" {
 			return ref.Name

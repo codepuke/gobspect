@@ -26,10 +26,16 @@
 //   - Contains filter "[Field~pattern]" — keeps elements where Field is a slice/array/map containing a string matching pattern
 //   - Recursive descent "..Name" — finds all nodes named Name at any depth
 //   - Wildcard recursive descent "..[Filter]" — traverses all depths, keeping nodes matching Filter
-//   - Field projection "A,B" — returns an anonymous struct with only the selected fields
+//   - Field projection "A,B" — returns an anonymous struct with only the selected
+//     fields. Within a projection, "/" navigates nested structs ("SKU,Address/Zip";
+//     the column takes the last component's name). A bare token containing "/"
+//     with no comma is a literal field/key name — string map keys may contain
+//     slashes — so use "Address.Zip" for single-value nested navigation.
 //
 // An empty path resolves to the root value (identity).
-// InterfaceValue nodes are unwrapped transparently at every step.
+// InterfaceValue nodes are unwrapped transparently at every step — during
+// navigation, when matching map keys (e.g. a map[any]T whose keys are
+// strings), and in returned values.
 // Out-of-bounds indices return (nil, false) rather than panicking.
 //
 // # One-off functions
@@ -39,6 +45,10 @@
 // invalid. This is intentional: these functions are designed for call sites
 // where the path is a compile-time constant and a bad expression is a
 // programming error.
+//
+// [Get] returns the first match of [All] in document order, evaluated
+// lazily — a fan-out segment (*, a filter, or ..) tries later elements when
+// the rest of the path fails on earlier ones.
 //
 //	v, ok   := query.Get(root, "Orders.0.Customer.Name")
 //	names   := query.All(root, "Orders.*.Customer.Name")

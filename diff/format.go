@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/codepuke/gobspect"
 )
@@ -145,7 +146,13 @@ func oneLine(v gobspect.Value) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.Join(strings.Fields(s), " ")
 	if len(s) > 160 {
-		s = s[:157] + "..."
+		// Back the cut up to a rune boundary: slicing mid-rune would emit
+		// invalid UTF-8.
+		cut := 157
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		s = s[:cut] + "..."
 	}
 	return s
 }

@@ -33,9 +33,9 @@ func TestDiff_Struct_AddedRemovedChangedFields(t *testing.T) {
 		{Name: "C", Value: gobspect.IntValue{V: 42}}, // only in a
 	}}
 	b := gobspect.StructValue{TypeName: "T", Fields: []gobspect.Field{
-		{Name: "A", Value: gobspect.IntValue{V: 1}},           // unchanged
-		{Name: "B", Value: gobspect.StringValue{V: "new"}},    // changed
-		{Name: "D", Value: gobspect.BoolValue{V: true}},       // only in b
+		{Name: "A", Value: gobspect.IntValue{V: 1}},        // unchanged
+		{Name: "B", Value: gobspect.StringValue{V: "new"}}, // changed
+		{Name: "D", Value: gobspect.BoolValue{V: true}},    // only in b
 	}}
 	d := diff.Diff(a, b)
 	require.NotNil(t, d)
@@ -71,6 +71,26 @@ func TestDiff_Map_ByKeyFormat(t *testing.T) {
 	md, ok := d.(diff.MapDelta)
 	require.True(t, ok, "expected MapDelta, got %T", d)
 	assert.Len(t, md.Entries, 3)
+}
+
+// TestDiff_Map_IntUintKeyNotConfused verifies that map keys IntValue{1} and
+// UintValue{1} — which format identically as "1" — are treated as distinct
+// keys, so a real change is not masked as "no difference".
+func TestDiff_Map_IntUintKeyNotConfused(t *testing.T) {
+	a := gobspect.MapValue{Entries: []gobspect.MapEntry{
+		{Key: gobspect.IntValue{V: 1}, Value: gobspect.StringValue{V: "x"}},
+		{Key: gobspect.UintValue{V: 1}, Value: gobspect.StringValue{V: "y"}},
+	}}
+	b := gobspect.MapValue{Entries: []gobspect.MapEntry{
+		{Key: gobspect.IntValue{V: 1}, Value: gobspect.StringValue{V: "x"}},
+		// UintValue{1} removed
+	}}
+	require.False(t, gobspect.Equal(a, b), "maps differ in length")
+	d := diff.Diff(a, b)
+	require.NotNil(t, d, "the removed uint(1) key must be reported, not collapsed into the int(1) key")
+	md, ok := d.(diff.MapDelta)
+	require.True(t, ok, "expected MapDelta, got %T", d)
+	assert.Len(t, md.Entries, 1)
 }
 
 func TestDiff_Slice_PositionAlign(t *testing.T) {
@@ -414,7 +434,7 @@ func TestDiff_Map_Of_Structs_ByKey(t *testing.T) {
 		mkEntry("bob", "Bob"),     // only in a → Removed
 	}}
 	b := gobspect.MapValue{KeyType: "string", ElemType: "User", Entries: []gobspect.MapEntry{
-		mkEntry("alice", "Alicia"),   // changed Name
+		mkEntry("alice", "Alicia"),    // changed Name
 		mkEntry("charlie", "Charlie"), // only in b → Added
 	}}
 	d := diff.Diff(a, b)

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/csv"
 	"encoding/gob"
-	"slices"
 	"strings"
 	"testing"
 
@@ -72,6 +71,28 @@ func TestCellStringInterfaceUnwrap(t *testing.T) {
 		Value:    gobspect.StringValue{V: "inner"},
 	}
 	assert.Equal(t, "inner", tabular.CellString(iv))
+}
+
+// TestPrinter_InterfaceWrappedBytesHonorFormat verifies that a []byte behind an
+// interface-typed field still respects the configured bytes format and
+// truncation, rather than falling through to unconditional hex.
+func TestPrinter_InterfaceWrappedBytesHonorFormat(t *testing.T) {
+	var buf bytes.Buffer
+	p := tabular.NewPrinter(&buf, tabular.WithDelimiter(','),
+		tabular.WithBytesFormat(gobspect.BytesBase64))
+
+	sv := gobspect.StructValue{Fields: []gobspect.Field{
+		{Name: "Blob", Value: gobspect.InterfaceValue{
+			TypeName: "[]uint8",
+			Value:    gobspect.BytesValue{V: []byte{0xca, 0xfe}},
+		}},
+	}}
+	require.NoError(t, p.WriteValue(sv))
+	require.NoError(t, p.Flush())
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	require.Len(t, lines, 2)
+	assert.Equal(t, "yv4=", lines[1], "interface-wrapped bytes must use the base64 format, not hex")
 }
 
 // — Printer tests ————————————————————————————————————————————————————————————
@@ -425,19 +446,17 @@ func TestPrinter_Union(t *testing.T) {
 	require.NoError(t, p.WriteValue(makePoint(100, 4, 5, 6)))
 	require.NoError(t, p.Flush())
 
-	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-
-	found := slices.Contains(lines, "X,Y,Z,ID,Total")
-	assert.True(t, found, "grown header X,Y,Z,ID,Total must appear in output; got:\n%s", buf.String())
-
-	foundOrderRow := false
-	for _, line := range lines {
-		if strings.HasPrefix(line, ",,,7,") {
-			foundOrderRow = true
-			break
-		}
-	}
-	assert.True(t, foundOrderRow, "order row with empty X/Y/Z and ID=7 must appear; got:\n%s", buf.String())
+	// Union output must be one rectangular table: a single header carrying the
+	// union of all columns, and every row padded with empty cells for columns
+	// its type lacks. encoding/csv's Reader enforces the rectangle.
+	r := csv.NewReader(&buf)
+	rows, err := r.ReadAll()
+	require.NoError(t, err, "union output must be rectangular CSV")
+	require.Len(t, rows, 4, "header + 3 rows")
+	assert.Equal(t, []string{"X", "Y", "Z", "ID", "Total"}, rows[0])
+	assert.Equal(t, []string{"1", "2", "3", "", ""}, rows[1])
+	assert.Equal(t, []string{"", "", "", "7", "9.99"}, rows[2])
+	assert.Equal(t, []string{"4", "5", "6", "", ""}, rows[3])
 }
 
 func TestPrinter_Partition(t *testing.T) {

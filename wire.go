@@ -50,17 +50,29 @@ func decodeInt(r io.ByteReader) (int64, error) {
 }
 
 // readBytes reads exactly n bytes from r, one byte at a time.
+//
+// The length n comes off the wire, so it is validated against the bytes
+// actually remaining in the source before the full buffer is allocated;
+// when the remaining count is unknown the buffer grows as bytes arrive.
+// Either way a hostile length cannot force a large allocation up front.
 func readBytes(r io.ByteReader, n uint64) ([]byte, error) {
 	if n > 1<<30 {
 		return nil, fmt.Errorf("gob: size too large: %d", n)
 	}
-	buf := make([]byte, n)
-	for i := range buf {
+	capHint := uint64(4096)
+	if rem := srcRemaining(r); rem >= 0 {
+		if n > uint64(rem) {
+			return nil, fmt.Errorf("gob: size %d exceeds %d remaining message bytes", n, rem)
+		}
+		capHint = n
+	}
+	buf := make([]byte, 0, min(n, capHint))
+	for i := uint64(0); i < n; i++ {
 		b, err := r.ReadByte()
 		if err != nil {
 			return nil, fmt.Errorf("gob: reading byte %d of %d: %w", i, n, err)
 		}
-		buf[i] = b
+		buf = append(buf, b)
 	}
 	return buf, nil
 }
@@ -163,6 +175,13 @@ func (sr *structReader) nextField() int {
 	}
 	if delta == 0 {
 		return 0
+	}
+	// Bootstrap structs have at most a handful of fields; a huge delta can
+	// only come from a corrupt stream, and converting it to int unchecked
+	// would wrap negative and masquerade as end-of-struct with no error.
+	if delta > 1<<16 {
+		sr.err = fmt.Errorf("gob: field delta %d out of range in bootstrap struct", delta)
+		return -1
 	}
 	sr.field += int(delta)
 	return sr.field
