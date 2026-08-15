@@ -11,9 +11,9 @@ import (
 // TestKeysPathStructValue verifies field names are returned in declaration order.
 func TestKeysPathStructValue(t *testing.T) {
 	root := makeStruct("Person",
-		field_("Name", makeString("Alice")),
-		field_("Age", makeInt(30)),
-		field_("Active", makeBool(true)),
+		makeField("Name", makeString("Alice")),
+		makeField("Age", makeInt(30)),
+		makeField("Active", makeBool(true)),
 	)
 
 	keys, ok := Keys(root, "")
@@ -33,7 +33,7 @@ func TestKeysPathEmptyStruct(t *testing.T) {
 // TestKeysPathSliceValue verifies index strings are returned for a slice.
 func TestKeysPathSliceValue(t *testing.T) {
 	slice := makeSlice(makeString("a"), makeString("b"), makeString("c"))
-	root := makeStruct("Root", field_("Items", slice))
+	root := makeStruct("Root", makeField("Items", slice))
 
 	keys, ok := Keys(root, "Items")
 	require.True(t, ok)
@@ -43,7 +43,7 @@ func TestKeysPathSliceValue(t *testing.T) {
 // TestKeysPathEmptySlice verifies an empty slice returns an empty slice, not nil.
 func TestKeysPathEmptySlice(t *testing.T) {
 	slice := makeSlice()
-	root := makeStruct("Root", field_("Items", slice))
+	root := makeStruct("Root", makeField("Items", slice))
 
 	keys, ok := Keys(root, "Items")
 	require.True(t, ok)
@@ -53,7 +53,7 @@ func TestKeysPathEmptySlice(t *testing.T) {
 // TestKeysPathArrayValue verifies index strings are returned for an array.
 func TestKeysPathArrayValue(t *testing.T) {
 	arr := makeArray(makeInt(10), makeInt(20), makeInt(30))
-	root := makeStruct("Root", field_("Arr", arr))
+	root := makeStruct("Root", makeField("Arr", arr))
 
 	keys, ok := Keys(root, "Arr")
 	require.True(t, ok)
@@ -63,7 +63,7 @@ func TestKeysPathArrayValue(t *testing.T) {
 // TestKeysPathEmptyArray verifies an empty array returns an empty slice, not nil.
 func TestKeysPathEmptyArray(t *testing.T) {
 	arr := makeArray()
-	root := makeStruct("Root", field_("Arr", arr))
+	root := makeStruct("Root", makeField("Arr", arr))
 
 	keys, ok := Keys(root, "Arr")
 	require.True(t, ok)
@@ -77,7 +77,7 @@ func TestKeysPathMapValue(t *testing.T) {
 		entry(makeString("bar"), makeInt(2)),
 		entry(makeString("baz"), makeInt(3)),
 	)
-	root := makeStruct("Root", field_("Meta", m))
+	root := makeStruct("Root", makeField("Meta", m))
 
 	keys, ok := Keys(root, "Meta")
 	require.True(t, ok)
@@ -121,10 +121,10 @@ func TestKeysPathEmptyMap(t *testing.T) {
 // TestKeysPathInterfaceValueUnwrapped verifies InterfaceValue is unwrapped before dispatch.
 func TestKeysPathInterfaceValueUnwrapped(t *testing.T) {
 	inner := makeStruct("Inner",
-		field_("X", makeInt(1)),
-		field_("Y", makeInt(2)),
+		makeField("X", makeInt(1)),
+		makeField("Y", makeInt(2)),
 	)
-	root := makeStruct("Root", field_("Child", wrapped("Inner", inner)))
+	root := makeStruct("Root", makeField("Child", wrapped("Inner", inner)))
 
 	keys, ok := Keys(root, "Child")
 	require.True(t, ok)
@@ -134,8 +134,8 @@ func TestKeysPathInterfaceValueUnwrapped(t *testing.T) {
 // TestKeysPathInterfaceValueAtRoot verifies unwrapping when root itself is wrapped.
 func TestKeysPathInterfaceValueAtRoot(t *testing.T) {
 	inner := makeStruct("Inner",
-		field_("A", makeString("a")),
-		field_("B", makeString("b")),
+		makeField("A", makeString("a")),
+		makeField("B", makeString("b")),
 	)
 	root := wrapped("Inner", inner)
 
@@ -172,7 +172,7 @@ func TestKeysPathScalarsReturnFalse(t *testing.T) {
 
 // TestKeysPathUnresolvedPathReturnsFalse verifies (nil, false) when the path does not resolve.
 func TestKeysPathUnresolvedPathReturnsFalse(t *testing.T) {
-	root := makeStruct("Root", field_("Name", makeString("hi")))
+	root := makeStruct("Root", makeField("Name", makeString("hi")))
 
 	keys, ok := Keys(root, "Missing")
 	assert.False(t, ok)
@@ -194,15 +194,15 @@ func TestKeysPanicsOnInvalidSyntax(t *testing.T) {
 // and then return keys at the destination node.
 func TestKeysPathNestedNavigation(t *testing.T) {
 	customer := makeStruct("Customer",
-		field_("Name", makeString("Alice")),
-		field_("Email", makeString("alice@example.com")),
+		makeField("Name", makeString("Alice")),
+		makeField("Email", makeString("alice@example.com")),
 	)
 	order := makeStruct("Order",
-		field_("Customer", customer),
-		field_("Total", makeInt(100)),
+		makeField("Customer", customer),
+		makeField("Total", makeInt(100)),
 	)
 	orders := makeSlice(order)
-	root := makeStruct("Root", field_("Orders", orders))
+	root := makeStruct("Root", makeField("Orders", orders))
 
 	// Keys at Orders.0.Customer should return Customer's field names.
 	keys, ok := Keys(root, "Orders.0.Customer")
@@ -218,8 +218,8 @@ func TestKeysPathNestedNavigation(t *testing.T) {
 // TestKeysPathPrecompiledPath verifies KeysPath works with a pre-compiled Path.
 func TestKeysPathPrecompiledPath(t *testing.T) {
 	root := makeStruct("Root",
-		field_("A", makeString("a")),
-		field_("B", makeString("b")),
+		makeField("A", makeString("a")),
+		makeField("B", makeString("b")),
 	)
 
 	p, err := Parse("")

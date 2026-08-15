@@ -14,9 +14,9 @@ import (
 // the named field is present in Fields.
 func TestFilterExistStructField(t *testing.T) {
 	orders := makeSlice(
-		makeStruct("Order", field_("Total", makeInt(10))),                                         // no Status
-		makeStruct("Order", field_("Status", makeString("active")), field_("Total", makeInt(20))), // has Status
-		makeStruct("Order", field_("Status", makeString("done")), field_("Total", makeInt(30))),   // has Status
+		makeStruct("Order", makeField("Total", makeInt(10))),                                            // no Status
+		makeStruct("Order", makeField("Status", makeString("active")), makeField("Total", makeInt(20))), // has Status
+		makeStruct("Order", makeField("Status", makeString("done")), makeField("Total", makeInt(30))),   // has Status
 	)
 
 	// All: keeps elements where Status is present.
@@ -34,8 +34,8 @@ func TestFilterExistStructField(t *testing.T) {
 // TestFilterExistOnArray verifies [Field!] works on ArrayValue containers.
 func TestFilterExistOnArray(t *testing.T) {
 	items := makeArray(
-		makeStruct("Item", field_("Price", makeInt(5))),
-		makeStruct("Item", field_("Name", makeString("widget")), field_("Price", makeInt(10))),
+		makeStruct("Item", makeField("Price", makeInt(5))),
+		makeStruct("Item", makeField("Name", makeString("widget")), makeField("Price", makeInt(10))),
 	)
 
 	got := All(items, "[Name!]")
@@ -47,9 +47,9 @@ func TestFilterExistOnArray(t *testing.T) {
 // value-struct has the named field.
 func TestFilterExistOnMapValues(t *testing.T) {
 	m := makeMap(
-		entry(makeString("a"), makeStruct("V", field_("X", makeInt(1)))),
-		entry(makeString("b"), makeStruct("V", field_("Y", makeInt(2)))), // no X
-		entry(makeString("c"), makeStruct("V", field_("X", makeInt(3)), field_("Y", makeInt(4)))),
+		entry(makeString("a"), makeStruct("V", makeField("X", makeInt(1)))),
+		entry(makeString("b"), makeStruct("V", makeField("Y", makeInt(2)))), // no X
+		entry(makeString("c"), makeStruct("V", makeField("X", makeInt(3)), makeField("Y", makeInt(4)))),
 	)
 
 	got := All(m, "[X!]")
@@ -73,9 +73,9 @@ func TestFilterExistMapElementIsMap(t *testing.T) {
 // before checking field presence.
 func TestFilterExistInterfaceValueUnwrap(t *testing.T) {
 	items := makeSlice(
-		wrapped("Item", makeStruct("Item", field_("Name", makeString("A")))),
-		wrapped("Item", makeStruct("Item", field_("Price", makeInt(5)))), // no Name
-		wrapped("Item", makeStruct("Item", field_("Name", makeString("B")))),
+		wrapped("Item", makeStruct("Item", makeField("Name", makeString("A")))),
+		wrapped("Item", makeStruct("Item", makeField("Price", makeInt(5)))), // no Name
+		wrapped("Item", makeStruct("Item", makeField("Name", makeString("B")))),
 	)
 
 	got := All(items, "[Name!]")
@@ -104,8 +104,8 @@ func TestFilterExistNonStructExcluded(t *testing.T) {
 // when no element has the field.
 func TestFilterExistNoMatchReturnsNilAndFalse(t *testing.T) {
 	orders := makeSlice(
-		makeStruct("Order", field_("Total", makeInt(10))),
-		makeStruct("Order", field_("Amount", makeInt(20))),
+		makeStruct("Order", makeField("Total", makeInt(10))),
+		makeStruct("Order", makeField("Amount", makeInt(20))),
 	)
 
 	got := All(orders, "[Status!]")
@@ -120,9 +120,9 @@ func TestFilterExistNoMatchReturnsNilAndFalse(t *testing.T) {
 // TestFilterGlobExactMatch verifies [Field=literal] performs an exact string match.
 func TestFilterGlobExactMatch(t *testing.T) {
 	orders := makeSlice(
-		makeStruct("Order", field_("Status", makeString("active")), field_("Total", makeInt(10))),
-		makeStruct("Order", field_("Status", makeString("inactive")), field_("Total", makeInt(20))),
-		makeStruct("Order", field_("Status", makeString("active")), field_("Total", makeInt(30))),
+		makeStruct("Order", makeField("Status", makeString("active")), makeField("Total", makeInt(10))),
+		makeStruct("Order", makeField("Status", makeString("inactive")), makeField("Total", makeInt(20))),
+		makeStruct("Order", makeField("Status", makeString("active")), makeField("Total", makeInt(30))),
 	)
 
 	got := All(orders, "[Status=active]")
@@ -134,9 +134,9 @@ func TestFilterGlobExactMatch(t *testing.T) {
 // TestFilterGlobPrefixMatch verifies [Field=prefix*] prefix-matching.
 func TestFilterGlobPrefixMatch(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Code", makeString("ERR_404"))),
-		makeStruct("Item", field_("Code", makeString("OK_200"))),
-		makeStruct("Item", field_("Code", makeString("ERR_500"))),
+		makeStruct("Item", makeField("Code", makeString("ERR_404"))),
+		makeStruct("Item", makeField("Code", makeString("OK_200"))),
+		makeStruct("Item", makeField("Code", makeString("ERR_500"))),
 	)
 
 	got := All(items, "[Code=ERR_*]")
@@ -148,9 +148,9 @@ func TestFilterGlobPrefixMatch(t *testing.T) {
 // TestFilterGlobSuffixMatch verifies [Field=*suffix] suffix-matching.
 func TestFilterGlobSuffixMatch(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Name", makeString("jackson"))), // ends with "son" — matches
-		makeStruct("Item", field_("Name", makeString("alice"))),   // does not end with "son" — excluded
-		makeStruct("Item", field_("Name", makeString("johnson"))), // ends with "son" — matches
+		makeStruct("Item", makeField("Name", makeString("jackson"))), // ends with "son" — matches
+		makeStruct("Item", makeField("Name", makeString("alice"))),   // does not end with "son" — excluded
+		makeStruct("Item", makeField("Name", makeString("johnson"))), // ends with "son" — matches
 	)
 
 	got := All(items, "[Name=*son]")
@@ -162,9 +162,9 @@ func TestFilterGlobSuffixMatch(t *testing.T) {
 // TestFilterGlobContainsMatch verifies [Field=*sub*] substring-matching.
 func TestFilterGlobContainsMatch(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Tag", makeString("foobar"))),
-		makeStruct("Item", field_("Tag", makeString("notbar"))),
-		makeStruct("Item", field_("Tag", makeString("foobaz"))),
+		makeStruct("Item", makeField("Tag", makeString("foobar"))),
+		makeStruct("Item", makeField("Tag", makeString("notbar"))),
+		makeStruct("Item", makeField("Tag", makeString("foobaz"))),
 	)
 
 	got := All(items, "[Tag=*foo*]")
@@ -177,9 +177,9 @@ func TestFilterGlobContainsMatch(t *testing.T) {
 // string, including the empty string.
 func TestFilterGlobStarMatchesAnyStringIncludingEmpty(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Name", makeString(""))),      // empty string — matches
-		makeStruct("Item", field_("Name", makeString("hello"))), // non-empty — matches
-		makeStruct("Item", field_("Price", makeInt(5))),         // no Name field — excluded
+		makeStruct("Item", makeField("Name", makeString(""))),      // empty string — matches
+		makeStruct("Item", makeField("Name", makeString("hello"))), // non-empty — matches
+		makeStruct("Item", makeField("Price", makeInt(5))),         // no Name field — excluded
 	)
 
 	got := All(items, "[Name=*]")
@@ -190,9 +190,9 @@ func TestFilterGlobStarMatchesAnyStringIncludingEmpty(t *testing.T) {
 // non-empty strings (? requires exactly one char; * matches the rest).
 func TestFilterGlobQuestionStarMatchesNonEmpty(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Name", makeString(""))),      // empty — excluded
-		makeStruct("Item", field_("Name", makeString("x"))),     // single char — included
-		makeStruct("Item", field_("Name", makeString("hello"))), // multi-char — included
+		makeStruct("Item", makeField("Name", makeString(""))),      // empty — excluded
+		makeStruct("Item", makeField("Name", makeString("x"))),     // single char — included
+		makeStruct("Item", makeField("Name", makeString("hello"))), // multi-char — included
 	)
 
 	got := All(items, "[Name=?*]")
@@ -204,10 +204,10 @@ func TestFilterGlobQuestionStarMatchesNonEmpty(t *testing.T) {
 // TestFilterGlobSingleTrailingQuestionMark verifies [Field=prefix?] exact-one-char suffix.
 func TestFilterGlobSingleTrailingQuestionMark(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Code", makeString("ERR_1"))),  // matches
-		makeStruct("Item", field_("Code", makeString("ERR_12"))), // does not match (two extra chars)
-		makeStruct("Item", field_("Code", makeString("ERR_X"))),  // matches
-		makeStruct("Item", field_("Code", makeString("ERR_"))),   // does not match (zero extra chars)
+		makeStruct("Item", makeField("Code", makeString("ERR_1"))),  // matches
+		makeStruct("Item", makeField("Code", makeString("ERR_12"))), // does not match (two extra chars)
+		makeStruct("Item", makeField("Code", makeString("ERR_X"))),  // matches
+		makeStruct("Item", makeField("Code", makeString("ERR_"))),   // does not match (zero extra chars)
 	)
 
 	got := All(items, "[Code=ERR_?]")
@@ -220,9 +220,9 @@ func TestFilterGlobSingleTrailingQuestionMark(t *testing.T) {
 // match a glob filter; all other types are excluded.
 func TestFilterGlobNonStringFieldExcluded(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Status", makeInt(1))),       // int — excluded
-		makeStruct("Item", field_("Status", makeBool(true))),   // bool — excluded
-		makeStruct("Item", field_("Status", makeString("ok"))), // string — matches
+		makeStruct("Item", makeField("Status", makeInt(1))),       // int — excluded
+		makeStruct("Item", makeField("Status", makeBool(true))),   // bool — excluded
+		makeStruct("Item", makeField("Status", makeString("ok"))), // string — matches
 	)
 
 	got := All(items, "[Status=ok]")
@@ -238,9 +238,9 @@ func TestFilterGlobNonStringFieldExcluded(t *testing.T) {
 // before evaluating the glob match.
 func TestFilterGlobInterfaceValueUnwrap(t *testing.T) {
 	items := makeSlice(
-		wrapped("Item", makeStruct("Item", field_("Status", makeString("active")))),
-		wrapped("Item", makeStruct("Item", field_("Status", makeString("inactive")))),
-		wrapped("Item", makeStruct("Item", field_("Status", makeString("active")))),
+		wrapped("Item", makeStruct("Item", makeField("Status", makeString("active")))),
+		wrapped("Item", makeStruct("Item", makeField("Status", makeString("inactive")))),
+		wrapped("Item", makeStruct("Item", makeField("Status", makeString("active")))),
 	)
 
 	got := All(items, "[Status=active]")
@@ -251,8 +251,8 @@ func TestFilterGlobInterfaceValueUnwrap(t *testing.T) {
 // are excluded even when the pattern is a catch-all.
 func TestFilterGlobMissingFieldExcluded(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Other", makeString("anything"))), // no Status
-		makeStruct("Item", field_("Status", makeString("active"))),  // has Status
+		makeStruct("Item", makeField("Other", makeString("anything"))), // no Status
+		makeStruct("Item", makeField("Status", makeString("active"))),  // has Status
 	)
 
 	got := All(items, "[Status=*]")
@@ -263,8 +263,8 @@ func TestFilterGlobMissingFieldExcluded(t *testing.T) {
 // TestFilterGlobNoMatchReturnsNilAndFalse verifies nil / false when no element matches.
 func TestFilterGlobNoMatchReturnsNilAndFalse(t *testing.T) {
 	orders := makeSlice(
-		makeStruct("Order", field_("Status", makeString("inactive"))),
-		makeStruct("Order", field_("Status", makeString("pending"))),
+		makeStruct("Order", makeField("Status", makeString("inactive"))),
+		makeStruct("Order", makeField("Status", makeString("pending"))),
 	)
 
 	got := All(orders, "[Status=active]")
@@ -280,9 +280,9 @@ func TestFilterGlobNoMatchReturnsNilAndFalse(t *testing.T) {
 // element when multiple elements match the filter.
 func TestFilterInGetPathFirstMatch(t *testing.T) {
 	orders := makeSlice(
-		makeStruct("Order", field_("Total", makeInt(10))), // no Status
-		makeStruct("Order", field_("Status", makeString("active")), field_("Total", makeInt(20))),
-		makeStruct("Order", field_("Status", makeString("active")), field_("Total", makeInt(30))),
+		makeStruct("Order", makeField("Total", makeInt(10))), // no Status
+		makeStruct("Order", makeField("Status", makeString("active")), makeField("Total", makeInt(20))),
+		makeStruct("Order", makeField("Status", makeString("active")), makeField("Total", makeInt(30))),
 	)
 
 	v, ok := Get(orders, "[Status=active].Total")
@@ -294,7 +294,7 @@ func TestFilterInGetPathFirstMatch(t *testing.T) {
 // the filter has no matches.
 func TestFilterInGetPathNoMatchReturnsFalse(t *testing.T) {
 	orders := makeSlice(
-		makeStruct("Order", field_("Status", makeString("inactive"))),
+		makeStruct("Order", makeField("Status", makeString("inactive"))),
 	)
 
 	_, ok := Get(orders, "[Status=active]")
@@ -307,10 +307,10 @@ func TestFilterInGetPathNoMatchReturnsFalse(t *testing.T) {
 // in AllPath: each surviving element's sub-field is returned.
 func TestFilterThenFieldNavigation(t *testing.T) {
 	root := makeStruct("Root",
-		field_("Orders", makeSlice(
-			makeStruct("Order", field_("Status", makeString("active")), field_("Total", makeInt(100))),
-			makeStruct("Order", field_("Status", makeString("inactive")), field_("Total", makeInt(200))),
-			makeStruct("Order", field_("Status", makeString("active")), field_("Total", makeInt(300))),
+		makeField("Orders", makeSlice(
+			makeStruct("Order", makeField("Status", makeString("active")), makeField("Total", makeInt(100))),
+			makeStruct("Order", makeField("Status", makeString("inactive")), makeField("Total", makeInt(200))),
+			makeStruct("Order", makeField("Status", makeString("active")), makeField("Total", makeInt(300))),
 		)),
 	)
 
@@ -324,14 +324,14 @@ func TestFilterThenFieldNavigation(t *testing.T) {
 // After filtering to active orders, we navigate into each order's nested Items slice.
 func TestFilterThenSliceNavigation(t *testing.T) {
 	activeOrder := makeStruct("Order",
-		field_("Status", makeString("active")),
-		field_("Items", makeSlice(makeString("apple"), makeString("banana"))),
+		makeField("Status", makeString("active")),
+		makeField("Items", makeSlice(makeString("apple"), makeString("banana"))),
 	)
 	inactiveOrder := makeStruct("Order",
-		field_("Status", makeString("inactive")),
-		field_("Items", makeSlice(makeString("cherry"))),
+		makeField("Status", makeString("inactive")),
+		makeField("Items", makeSlice(makeString("cherry"))),
 	)
-	root := makeStruct("Root", field_("Orders", makeSlice(activeOrder, inactiveOrder)))
+	root := makeStruct("Root", makeField("Orders", makeSlice(activeOrder, inactiveOrder)))
 
 	// Navigate into Items of each active order, then expand Items elements.
 	got := All(root, "Orders[Status=active].Items.*")
@@ -343,14 +343,14 @@ func TestFilterThenSliceNavigation(t *testing.T) {
 // TestFilterAfterWildcard verifies a filter applied after wildcard expansion.
 // "Orders.*.Tags[Name=foo]" expands all orders, then filters each order's Tags.
 func TestFilterAfterWildcard(t *testing.T) {
-	order0 := makeStruct("Order", field_("Tags", makeSlice(
-		makeStruct("Tag", field_("Name", makeString("foo"))),
-		makeStruct("Tag", field_("Name", makeString("bar"))),
+	order0 := makeStruct("Order", makeField("Tags", makeSlice(
+		makeStruct("Tag", makeField("Name", makeString("foo"))),
+		makeStruct("Tag", makeField("Name", makeString("bar"))),
 	)))
-	order1 := makeStruct("Order", field_("Tags", makeSlice(
-		makeStruct("Tag", field_("Name", makeString("baz"))),
+	order1 := makeStruct("Order", makeField("Tags", makeSlice(
+		makeStruct("Tag", makeField("Name", makeString("baz"))),
 	)))
-	root := makeStruct("Root", field_("Orders", makeSlice(order0, order1)))
+	root := makeStruct("Root", makeField("Orders", makeSlice(order0, order1)))
 
 	got := All(root, "Orders.*.Tags[Name=foo]")
 	require.Len(t, got, 1)
@@ -360,11 +360,11 @@ func TestFilterAfterWildcard(t *testing.T) {
 // TestFilterExistAfterWildcard verifies [Field!] applied after wildcard expansion.
 func TestFilterExistAfterWildcard(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Price", makeInt(10))),                                       // no Name
-		makeStruct("Item", field_("Name", makeString("widget")), field_("Price", makeInt(20))), // has Name
-		makeStruct("Item", field_("Name", makeString("gadget")), field_("Price", makeInt(30))), // has Name
+		makeStruct("Item", makeField("Price", makeInt(10))),                                          // no Name
+		makeStruct("Item", makeField("Name", makeString("widget")), makeField("Price", makeInt(20))), // has Name
+		makeStruct("Item", makeField("Name", makeString("gadget")), makeField("Price", makeInt(30))), // has Name
 	)
-	root := makeStruct("Root", field_("Items", items))
+	root := makeStruct("Root", makeField("Items", items))
 
 	got := All(root, "Items[Name!].Price")
 	require.Len(t, got, 2)
@@ -379,10 +379,10 @@ func TestFilterExistAfterWildcard(t *testing.T) {
 // Here we test the actual working composition: [Customer!].Price.
 func TestFilterExistFieldThenGlob(t *testing.T) {
 	root := makeStruct("Root",
-		field_("Orders", makeSlice(
-			makeStruct("Order", field_("Customer", makeStruct("Customer", field_("Name", makeString("Alice")))), field_("Price", makeInt(50))),
-			makeStruct("Order", field_("Price", makeInt(75))), // no Customer
-			makeStruct("Order", field_("Customer", makeStruct("Customer", field_("Name", makeString("Bob")))), field_("Price", makeInt(100))),
+		makeField("Orders", makeSlice(
+			makeStruct("Order", makeField("Customer", makeStruct("Customer", makeField("Name", makeString("Alice")))), makeField("Price", makeInt(50))),
+			makeStruct("Order", makeField("Price", makeInt(75))), // no Customer
+			makeStruct("Order", makeField("Customer", makeStruct("Customer", makeField("Name", makeString("Bob")))), makeField("Price", makeInt(100))),
 		)),
 	)
 
@@ -396,10 +396,10 @@ func TestFilterExistFieldThenGlob(t *testing.T) {
 // status starts with "err".
 func TestFilterErrPrefixGlob(t *testing.T) {
 	root := makeStruct("Root",
-		field_("Orders", makeSlice(
-			makeStruct("Order", field_("Status", makeString("err_timeout")), field_("ID", makeInt(1))),
-			makeStruct("Order", field_("Status", makeString("ok")), field_("ID", makeInt(2))),
-			makeStruct("Order", field_("Status", makeString("err_cancelled")), field_("ID", makeInt(3))),
+		makeField("Orders", makeSlice(
+			makeStruct("Order", makeField("Status", makeString("err_timeout")), makeField("ID", makeInt(1))),
+			makeStruct("Order", makeField("Status", makeString("ok")), makeField("ID", makeInt(2))),
+			makeStruct("Order", makeField("Status", makeString("err_cancelled")), makeField("ID", makeInt(3))),
 		)),
 	)
 
@@ -415,9 +415,9 @@ func TestFilterErrPrefixGlob(t *testing.T) {
 // named field is a slice containing at least one element that exactly matches.
 func TestFilterContainsExactMatchOnSlice(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Tags", makeSlice(makeString("go"), makeString("cloud")))),
-		makeStruct("Item", field_("Tags", makeSlice(makeString("rust")))),
-		makeStruct("Item", field_("Tags", makeSlice(makeString("go"), makeString("devops")))),
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("go"), makeString("cloud")))),
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("rust")))),
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("go"), makeString("devops")))),
 	)
 
 	got := All(items, "[Tags~go]")
@@ -429,9 +429,9 @@ func TestFilterContainsExactMatchOnSlice(t *testing.T) {
 // TestFilterContainsPrefixGlobOnSlice verifies [Field~pre*] prefix-glob on slice elements.
 func TestFilterContainsPrefixGlobOnSlice(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Tags", makeSlice(makeString("devops"), makeString("cloud")))),
-		makeStruct("Item", field_("Tags", makeSlice(makeString("golang")))),
-		makeStruct("Item", field_("Tags", makeSlice(makeString("dev-tools"), makeString("ci")))),
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("devops"), makeString("cloud")))),
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("golang")))),
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("dev-tools"), makeString("ci")))),
 	)
 
 	got := All(items, "[Tags~dev*]")
@@ -441,9 +441,9 @@ func TestFilterContainsPrefixGlobOnSlice(t *testing.T) {
 // TestFilterContainsSuffixGlobOnSlice verifies [Field~*suf] suffix-glob on slice elements.
 func TestFilterContainsSuffixGlobOnSlice(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Tags", makeSlice(makeString("devops")))),
-		makeStruct("Item", field_("Tags", makeSlice(makeString("secops"), makeString("cloud")))),
-		makeStruct("Item", field_("Tags", makeSlice(makeString("golang")))),
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("devops")))),
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("secops"), makeString("cloud")))),
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("golang")))),
 	)
 
 	got := All(items, "[Tags~*ops]")
@@ -453,9 +453,9 @@ func TestFilterContainsSuffixGlobOnSlice(t *testing.T) {
 // TestFilterContainsSubstringGlobOnSlice verifies [Field~*mid*] substring-glob on slice elements.
 func TestFilterContainsSubstringGlobOnSlice(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Tags", makeSlice(makeString("go-testing")))),
-		makeStruct("Item", field_("Tags", makeSlice(makeString("rust-testing")))),
-		makeStruct("Item", field_("Tags", makeSlice(makeString("devops")))),
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("go-testing")))),
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("rust-testing")))),
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("devops")))),
 	)
 
 	got := All(items, "[Tags~*test*]")
@@ -466,9 +466,9 @@ func TestFilterContainsSubstringGlobOnSlice(t *testing.T) {
 // slice containing an empty string element.
 func TestFilterContainsStarMatchesAnyElemIncludingEmpty(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Tags", makeSlice(makeString("")))),          // empty string element — matches
-		makeStruct("Item", field_("Tags", makeSlice(makeString("something")))), // non-empty — matches
-		makeStruct("Item", field_("Price", makeInt(5))),                        // no Tags field — excluded
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("")))),          // empty string element — matches
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("something")))), // non-empty — matches
+		makeStruct("Item", makeField("Price", makeInt(5))),                        // no Tags field — excluded
 	)
 
 	got := All(items, "[Tags~*]")
@@ -479,9 +479,9 @@ func TestFilterContainsStarMatchesAnyElemIncludingEmpty(t *testing.T) {
 // only structs whose slice contains at least one non-empty string element.
 func TestFilterContainsQuestionStarMatchesOnlyNonEmptyElems(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Tags", makeSlice(makeString("")))),                       // only empty — excluded
-		makeStruct("Item", field_("Tags", makeSlice(makeString(""), makeString("devops")))), // has non-empty — included
-		makeStruct("Item", field_("Tags", makeSlice(makeString("go")))),                     // non-empty — included
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("")))),                       // only empty — excluded
+		makeStruct("Item", makeField("Tags", makeSlice(makeString(""), makeString("devops")))), // has non-empty — included
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("go")))),                     // non-empty — included
 	)
 
 	got := All(items, "[Tags~?*]")
@@ -492,9 +492,9 @@ func TestFilterContainsQuestionStarMatchesOnlyNonEmptyElems(t *testing.T) {
 // elements with exactly one trailing character after "ERR_".
 func TestFilterContainsSingleTrailingCharWildcard(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Codes", makeSlice(makeString("ERR_1"), makeString("OK")))),   // ERR_1 matches
-		makeStruct("Item", field_("Codes", makeSlice(makeString("ERR_12")))),                    // two trailing chars — no match
-		makeStruct("Item", field_("Codes", makeSlice(makeString("ERR_X"), makeString("ERR_")))), // ERR_X matches
+		makeStruct("Item", makeField("Codes", makeSlice(makeString("ERR_1"), makeString("OK")))),   // ERR_1 matches
+		makeStruct("Item", makeField("Codes", makeSlice(makeString("ERR_12")))),                    // two trailing chars — no match
+		makeStruct("Item", makeField("Codes", makeSlice(makeString("ERR_X"), makeString("ERR_")))), // ERR_X matches
 	)
 
 	got := All(items, "[Codes~ERR_?]")
@@ -504,8 +504,8 @@ func TestFilterContainsSingleTrailingCharWildcard(t *testing.T) {
 // TestFilterContainsExactMatchOnArray verifies [Field~exact] works on ArrayValue.
 func TestFilterContainsExactMatchOnArray(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Tags", makeArray(makeString("go"), makeString("cloud")))),
-		makeStruct("Item", field_("Tags", makeArray(makeString("rust")))),
+		makeStruct("Item", makeField("Tags", makeArray(makeString("go"), makeString("cloud")))),
+		makeStruct("Item", makeField("Tags", makeArray(makeString("rust")))),
 	)
 
 	got := All(items, "[Tags~go]")
@@ -516,9 +516,9 @@ func TestFilterContainsExactMatchOnArray(t *testing.T) {
 // matches if any StringValue key in the map equals the pattern.
 func TestFilterContainsExactMatchOnMapKeys(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Meta", makeMap(entry(makeString("devops"), makeInt(1)), entry(makeString("cloud"), makeInt(2))))),
-		makeStruct("Item", field_("Meta", makeMap(entry(makeString("security"), makeInt(3))))),
-		makeStruct("Item", field_("Meta", makeMap(entry(makeString("devops"), makeInt(4))))),
+		makeStruct("Item", makeField("Meta", makeMap(entry(makeString("devops"), makeInt(1)), entry(makeString("cloud"), makeInt(2))))),
+		makeStruct("Item", makeField("Meta", makeMap(entry(makeString("security"), makeInt(3))))),
+		makeStruct("Item", makeField("Meta", makeMap(entry(makeString("devops"), makeInt(4))))),
 	)
 
 	got := All(items, "[Meta~devops]")
@@ -529,8 +529,8 @@ func TestFilterContainsExactMatchOnMapKeys(t *testing.T) {
 // with non-string keys produces no matches.
 func TestFilterContainsMapNonStringKeysNoMatch(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Meta", makeMap(entry(makeInt(1), makeString("one"))))),
-		makeStruct("Item", field_("Meta", makeMap(entry(makeInt(2), makeString("two"))))),
+		makeStruct("Item", makeField("Meta", makeMap(entry(makeInt(1), makeString("one"))))),
+		makeStruct("Item", makeField("Meta", makeMap(entry(makeInt(2), makeString("two"))))),
 	)
 
 	got := All(items, "[Meta~1]")
@@ -541,7 +541,7 @@ func TestFilterContainsMapNonStringKeysNoMatch(t *testing.T) {
 // field returns no match — use [Field=pattern] for scalars.
 func TestFilterContainsScalarFieldNoMatch(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Name", makeString("exact"))),
+		makeStruct("Item", makeField("Name", makeString("exact"))),
 	)
 
 	got := All(items, "[Name~exact]")
@@ -552,7 +552,7 @@ func TestFilterContainsScalarFieldNoMatch(t *testing.T) {
 // absent from the struct returns no match.
 func TestFilterContainsAbsentFieldNoMatch(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Other", makeString("exact"))),
+		makeStruct("Item", makeField("Other", makeString("exact"))),
 	)
 
 	got := All(items, "[Tags~exact]")
@@ -563,7 +563,7 @@ func TestFilterContainsAbsentFieldNoMatch(t *testing.T) {
 // non-string values (e.g., ints) returns no match.
 func TestFilterContainsNonStringSliceNoMatch(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Nums", makeSlice(makeInt(1), makeInt(2), makeInt(3)))),
+		makeStruct("Item", makeField("Nums", makeSlice(makeInt(1), makeInt(2), makeInt(3)))),
 	)
 
 	got := All(items, "[Nums~1]")
@@ -574,7 +574,7 @@ func TestFilterContainsNonStringSliceNoMatch(t *testing.T) {
 // produces no match.
 func TestFilterContainsEmptySliceNoMatch(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Tags", makeSlice())),
+		makeStruct("Item", makeField("Tags", makeSlice())),
 	)
 
 	got := All(items, "[Tags~anything]")
@@ -585,11 +585,11 @@ func TestFilterContainsEmptySliceNoMatch(t *testing.T) {
 // InterfaceValue-wrapped StringValues inside the slice.
 func TestFilterContainsInterfaceWrappedSliceElems(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Tags", makeSlice(
+		makeStruct("Item", makeField("Tags", makeSlice(
 			wrapped("string", makeString("devops")),
 			wrapped("string", makeString("cloud")),
 		))),
-		makeStruct("Item", field_("Tags", makeSlice(
+		makeStruct("Item", makeField("Tags", makeSlice(
 			wrapped("string", makeString("security")),
 		))),
 	)
@@ -603,10 +603,10 @@ func TestFilterContainsInterfaceWrappedSliceElems(t *testing.T) {
 // match are kept, and the correct count is returned.
 func TestFilterContainsMultipleElemsPartialMatch(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Tags", makeSlice(makeString("go"), makeString("devops"), makeString("cloud")))), // "go" matches
-		makeStruct("Item", field_("Tags", makeSlice(makeString("rust"), makeString("wasm")))),                      // no "go" — excluded
-		makeStruct("Item", field_("Tags", makeSlice(makeString("python"), makeString("go"), makeString("ml")))),    // "go" matches
-		makeStruct("Item", field_("Tags", makeSlice(makeString("java")))),                                          // no "go" — excluded
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("go"), makeString("devops"), makeString("cloud")))), // "go" matches
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("rust"), makeString("wasm")))),                      // no "go" — excluded
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("python"), makeString("go"), makeString("ml")))),    // "go" matches
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("java")))),                                          // no "go" — excluded
 	)
 
 	got := All(items, "[Tags~go]")
@@ -620,10 +620,10 @@ func TestFilterContainsMultipleElemsPartialMatch(t *testing.T) {
 // whose Tags slice contains "devops".
 func TestFilterContainsChainedWithExist(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Tags", makeSlice(makeString("devops"), makeString("cloud"))), field_("ID", makeInt(1))),
-		makeStruct("Item", field_("ID", makeInt(2))),                                                    // no Tags — excluded by [Tags!]
-		makeStruct("Item", field_("Tags", makeSlice(makeString("security"))), field_("ID", makeInt(3))), // Tags present, no "devops" — excluded by [Tags~devops]
-		makeStruct("Item", field_("Tags", makeSlice(makeString("devops"))), field_("ID", makeInt(4))),
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("devops"), makeString("cloud"))), makeField("ID", makeInt(1))),
+		makeStruct("Item", makeField("ID", makeInt(2))),                                                       // no Tags — excluded by [Tags!]
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("security"))), makeField("ID", makeInt(3))), // Tags present, no "devops" — excluded by [Tags~devops]
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("devops"))), makeField("ID", makeInt(4))),
 	)
 
 	// Filter: Tags present, then within those, Tags contains "devops".
@@ -701,9 +701,9 @@ func TestFilterContainsOnMapElements_AbsentKey(t *testing.T) {
 // named field is absent.
 func TestFilterNotExistAbsentField(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Price", makeInt(10))),                                         // no Status — kept
-		makeStruct("Item", field_("Status", makeString("active")), field_("Price", makeInt(20))), // has Status — excluded
-		makeStruct("Item", field_("Price", makeInt(30))),                                         // no Status — kept
+		makeStruct("Item", makeField("Price", makeInt(10))),                                            // no Status — kept
+		makeStruct("Item", makeField("Status", makeString("active")), makeField("Price", makeInt(20))), // has Status — excluded
+		makeStruct("Item", makeField("Price", makeInt(30))),                                            // no Status — kept
 	)
 
 	got := All(items, "[Status!!]")
@@ -716,8 +716,8 @@ func TestFilterNotExistAbsentField(t *testing.T) {
 // named field is present.
 func TestFilterNotExistPresentField(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Status", makeString("active"))),
-		makeStruct("Item", field_("Status", makeString("inactive"))),
+		makeStruct("Item", makeField("Status", makeString("active"))),
+		makeStruct("Item", makeField("Status", makeString("inactive"))),
 	)
 
 	got := All(items, "[Status!!]")
@@ -744,7 +744,7 @@ func TestFilterNotExistNonStructPassThrough(t *testing.T) {
 // elements where the field is absent.
 func TestFilterNegGlobAbsentField(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Other", makeString("active"))), // no Status
+		makeStruct("Item", makeField("Other", makeString("active"))), // no Status
 	)
 
 	got := All(items, "[Status!=active]")
@@ -755,7 +755,7 @@ func TestFilterNegGlobAbsentField(t *testing.T) {
 // elements where the field is not a string.
 func TestFilterNegGlobNonStringField(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Count", makeInt(42))),
+		makeStruct("Item", makeField("Count", makeInt(42))),
 	)
 
 	got := All(items, "[Count!=42]")
@@ -766,9 +766,9 @@ func TestFilterNegGlobNonStringField(t *testing.T) {
 // whose field value matches the pattern.
 func TestFilterNegGlobMatchingExcluded(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Status", makeString("active")), field_("ID", makeInt(1))),
-		makeStruct("Item", field_("Status", makeString("inactive")), field_("ID", makeInt(2))),
-		makeStruct("Item", field_("Status", makeString("active")), field_("ID", makeInt(3))),
+		makeStruct("Item", makeField("Status", makeString("active")), makeField("ID", makeInt(1))),
+		makeStruct("Item", makeField("Status", makeString("inactive")), makeField("ID", makeInt(2))),
+		makeStruct("Item", makeField("Status", makeString("active")), makeField("ID", makeInt(3))),
 	)
 
 	got := All(items, "[Status!=active]")
@@ -780,9 +780,9 @@ func TestFilterNegGlobMatchingExcluded(t *testing.T) {
 // whose field value does NOT match the pattern.
 func TestFilterNegGlobNonMatchingKept(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Code", makeString("ERR_404")), field_("ID", makeInt(1))),
-		makeStruct("Item", field_("Code", makeString("OK_200")), field_("ID", makeInt(2))),
-		makeStruct("Item", field_("Code", makeString("ERR_500")), field_("ID", makeInt(3))),
+		makeStruct("Item", makeField("Code", makeString("ERR_404")), makeField("ID", makeInt(1))),
+		makeStruct("Item", makeField("Code", makeString("OK_200")), makeField("ID", makeInt(2))),
+		makeStruct("Item", makeField("Code", makeString("ERR_500")), makeField("ID", makeInt(3))),
 	)
 
 	// [Code!=ERR_*] keeps only those where Code does NOT start with ERR_
@@ -797,7 +797,7 @@ func TestFilterNegGlobNonMatchingKept(t *testing.T) {
 // elements where the field is absent.
 func TestFilterNegContainsAbsentField(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Other", makeSlice(makeString("go")))), // no Tags
+		makeStruct("Item", makeField("Other", makeSlice(makeString("go")))), // no Tags
 	)
 
 	got := All(items, "[Tags!~go]")
@@ -808,7 +808,7 @@ func TestFilterNegContainsAbsentField(t *testing.T) {
 // elements where the field is not a collection.
 func TestFilterNegContainsNonCollection(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Name", makeString("go"))),
+		makeStruct("Item", makeField("Name", makeString("go"))),
 	)
 
 	got := All(items, "[Name!~go]")
@@ -819,9 +819,9 @@ func TestFilterNegContainsNonCollection(t *testing.T) {
 // elements whose collection field contains an element matching the pattern.
 func TestFilterNegContainsCollectionWithMatch(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Tags", makeSlice(makeString("go"), makeString("cloud"))), field_("ID", makeInt(1))),
-		makeStruct("Item", field_("Tags", makeSlice(makeString("rust"))), field_("ID", makeInt(2))),
-		makeStruct("Item", field_("Tags", makeSlice(makeString("go"), makeString("devops"))), field_("ID", makeInt(3))),
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("go"), makeString("cloud"))), makeField("ID", makeInt(1))),
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("rust"))), makeField("ID", makeInt(2))),
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("go"), makeString("devops"))), makeField("ID", makeInt(3))),
 	)
 
 	// [Tags!~go] keeps only those that do NOT contain "go"
@@ -834,8 +834,8 @@ func TestFilterNegContainsCollectionWithMatch(t *testing.T) {
 // elements whose collection field contains no element matching the pattern.
 func TestFilterNegContainsCollectionWithNoMatch(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Tags", makeSlice(makeString("rust"), makeString("wasm"))), field_("ID", makeInt(1))),
-		makeStruct("Item", field_("Tags", makeSlice(makeString("python"))), field_("ID", makeInt(2))),
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("rust"), makeString("wasm"))), makeField("ID", makeInt(1))),
+		makeStruct("Item", makeField("Tags", makeSlice(makeString("python"))), makeField("ID", makeInt(2))),
 	)
 
 	got := All(items, "[Tags!~go]")
@@ -848,8 +848,8 @@ func TestFilterNegContainsCollectionWithNoMatch(t *testing.T) {
 // whose map field has no key matching the pattern.
 func TestFilterNegContainsMapWithNoMatch(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Meta", makeMap(entry(makeString("devops"), makeInt(1)), entry(makeString("cloud"), makeInt(2)))), field_("ID", makeInt(1))),
-		makeStruct("Item", field_("Meta", makeMap(entry(makeString("security"), makeInt(3)))), field_("ID", makeInt(2))),
+		makeStruct("Item", makeField("Meta", makeMap(entry(makeString("devops"), makeInt(1)), entry(makeString("cloud"), makeInt(2)))), makeField("ID", makeInt(1))),
+		makeStruct("Item", makeField("Meta", makeMap(entry(makeString("security"), makeInt(3)))), makeField("ID", makeInt(2))),
 	)
 
 	// [Meta!~devops] keeps those whose map does NOT contain a "devops" key
@@ -864,9 +864,9 @@ func TestFilterNegContainsMapWithNoMatch(t *testing.T) {
 // a space matches a string field value that contains that space.
 func TestFilterGlobQuotedPatternWithSpace(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Status", makeString("active user")), field_("ID", makeInt(1))),
-		makeStruct("Item", field_("Status", makeString("active")), field_("ID", makeInt(2))),
-		makeStruct("Item", field_("Status", makeString("inactive user")), field_("ID", makeInt(3))),
+		makeStruct("Item", makeField("Status", makeString("active user")), makeField("ID", makeInt(1))),
+		makeStruct("Item", makeField("Status", makeString("active")), makeField("ID", makeInt(2))),
+		makeStruct("Item", makeField("Status", makeString("inactive user")), makeField("ID", makeInt(3))),
 	)
 
 	got := All(items, `[Status="active user"]`)
@@ -879,8 +879,8 @@ func TestFilterGlobQuotedPatternWithSpace(t *testing.T) {
 // in a value rather than acting as a glob wildcard.
 func TestFilterGlobQuotedPatternLiteralStar(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Tag", makeString("*")), field_("ID", makeInt(1))),        // literal *
-		makeStruct("Item", field_("Tag", makeString("anything")), field_("ID", makeInt(2))), // not *
+		makeStruct("Item", makeField("Tag", makeString("*")), makeField("ID", makeInt(1))),        // literal *
+		makeStruct("Item", makeField("Tag", makeString("anything")), makeField("ID", makeInt(2))), // not *
 	)
 
 	// \* in quoted pattern should match a literal '*' string.
@@ -900,9 +900,9 @@ func makeUint(u uint64) gobspect.Value { return gobspect.UintValue{V: u} }
 // TestFilterNumEqInt verifies [Field==N] equality on IntValue.
 func TestFilterNumEqInt(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Count", makeInt(5)), field_("ID", makeInt(1))),
-		makeStruct("Item", field_("Count", makeInt(3)), field_("ID", makeInt(2))),
-		makeStruct("Item", field_("Count", makeInt(5)), field_("ID", makeInt(3))),
+		makeStruct("Item", makeField("Count", makeInt(5)), makeField("ID", makeInt(1))),
+		makeStruct("Item", makeField("Count", makeInt(3)), makeField("ID", makeInt(2))),
+		makeStruct("Item", makeField("Count", makeInt(5)), makeField("ID", makeInt(3))),
 	)
 
 	got := All(items, "[Count==5]")
@@ -914,8 +914,8 @@ func TestFilterNumEqInt(t *testing.T) {
 // TestFilterNumEqUint verifies [Field==N] equality on UintValue.
 func TestFilterNumEqUint(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Count", makeUint(5)), field_("ID", makeInt(1))),
-		makeStruct("Item", field_("Count", makeUint(10)), field_("ID", makeInt(2))),
+		makeStruct("Item", makeField("Count", makeUint(5)), makeField("ID", makeInt(1))),
+		makeStruct("Item", makeField("Count", makeUint(10)), makeField("ID", makeInt(2))),
 	)
 
 	got := All(items, "[Count==5]")
@@ -926,9 +926,9 @@ func TestFilterNumEqUint(t *testing.T) {
 // TestFilterNumLTInt verifies [Field<N] on IntValue.
 func TestFilterNumLTInt(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Price", makeInt(50)), field_("ID", makeInt(1))),
-		makeStruct("Item", field_("Price", makeInt(100)), field_("ID", makeInt(2))),
-		makeStruct("Item", field_("Price", makeInt(99)), field_("ID", makeInt(3))),
+		makeStruct("Item", makeField("Price", makeInt(50)), makeField("ID", makeInt(1))),
+		makeStruct("Item", makeField("Price", makeInt(100)), makeField("ID", makeInt(2))),
+		makeStruct("Item", makeField("Price", makeInt(99)), makeField("ID", makeInt(3))),
 	)
 
 	got := All(items, "[Price<100]")
@@ -940,9 +940,9 @@ func TestFilterNumLTInt(t *testing.T) {
 // TestFilterNumGTInt verifies [Field>N] on IntValue.
 func TestFilterNumGTInt(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Price", makeInt(0)), field_("ID", makeInt(1))),
-		makeStruct("Item", field_("Price", makeInt(1)), field_("ID", makeInt(2))),
-		makeStruct("Item", field_("Price", makeInt(-1)), field_("ID", makeInt(3))),
+		makeStruct("Item", makeField("Price", makeInt(0)), makeField("ID", makeInt(1))),
+		makeStruct("Item", makeField("Price", makeInt(1)), makeField("ID", makeInt(2))),
+		makeStruct("Item", makeField("Price", makeInt(-1)), makeField("ID", makeInt(3))),
 	)
 
 	got := All(items, "[Price>0]")
@@ -953,9 +953,9 @@ func TestFilterNumGTInt(t *testing.T) {
 // TestFilterNumLTEFloat verifies [Field<=N] on FloatValue.
 func TestFilterNumLTEFloat(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Price", makeFloat(99.99)), field_("ID", makeInt(1))),
-		makeStruct("Item", field_("Price", makeFloat(100.00)), field_("ID", makeInt(2))),
-		makeStruct("Item", field_("Price", makeFloat(50.00)), field_("ID", makeInt(3))),
+		makeStruct("Item", makeField("Price", makeFloat(99.99)), makeField("ID", makeInt(1))),
+		makeStruct("Item", makeField("Price", makeFloat(100.00)), makeField("ID", makeInt(2))),
+		makeStruct("Item", makeField("Price", makeFloat(50.00)), makeField("ID", makeInt(3))),
 	)
 
 	got := All(items, "[Price<=99.99]")
@@ -967,9 +967,9 @@ func TestFilterNumLTEFloat(t *testing.T) {
 // TestFilterNumGTEInt verifies [Field>=N] on IntValue.
 func TestFilterNumGTEInt(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Count", makeInt(0)), field_("ID", makeInt(1))),
-		makeStruct("Item", field_("Count", makeInt(1)), field_("ID", makeInt(2))),
-		makeStruct("Item", field_("Count", makeInt(5)), field_("ID", makeInt(3))),
+		makeStruct("Item", makeField("Count", makeInt(0)), makeField("ID", makeInt(1))),
+		makeStruct("Item", makeField("Count", makeInt(1)), makeField("ID", makeInt(2))),
+		makeStruct("Item", makeField("Count", makeInt(5)), makeField("ID", makeInt(3))),
 	)
 
 	got := All(items, "[Count>=1]")
@@ -981,8 +981,8 @@ func TestFilterNumGTEInt(t *testing.T) {
 // TestFilterNumBoolEqTrue verifies [Field==true] matches BoolValue true.
 func TestFilterNumBoolEqTrue(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Enabled", makeBool(true)), field_("ID", makeInt(1))),
-		makeStruct("Item", field_("Enabled", makeBool(false)), field_("ID", makeInt(2))),
+		makeStruct("Item", makeField("Enabled", makeBool(true)), makeField("ID", makeInt(1))),
+		makeStruct("Item", makeField("Enabled", makeBool(false)), makeField("ID", makeInt(2))),
 	)
 
 	got := All(items, "[Enabled==true]")
@@ -993,8 +993,8 @@ func TestFilterNumBoolEqTrue(t *testing.T) {
 // TestFilterNumBoolEqFalse verifies [Field==false] matches BoolValue false.
 func TestFilterNumBoolEqFalse(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Enabled", makeBool(true)), field_("ID", makeInt(1))),
-		makeStruct("Item", field_("Enabled", makeBool(false)), field_("ID", makeInt(2))),
+		makeStruct("Item", makeField("Enabled", makeBool(true)), makeField("ID", makeInt(1))),
+		makeStruct("Item", makeField("Enabled", makeBool(false)), makeField("ID", makeInt(2))),
 	)
 
 	got := All(items, "[Enabled==false]")
@@ -1005,7 +1005,7 @@ func TestFilterNumBoolEqFalse(t *testing.T) {
 // TestFilterNumBoolLTRejected verifies [Field<N] on BoolValue returns false.
 func TestFilterNumBoolLTRejected(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Enabled", makeBool(true)), field_("ID", makeInt(1))),
+		makeStruct("Item", makeField("Enabled", makeBool(true)), makeField("ID", makeInt(1))),
 	)
 
 	got := All(items, "[Enabled<1]")
@@ -1015,7 +1015,7 @@ func TestFilterNumBoolLTRejected(t *testing.T) {
 // TestFilterNumAbsentField verifies that a missing field returns false.
 func TestFilterNumAbsentField(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Other", makeInt(5)), field_("ID", makeInt(1))),
+		makeStruct("Item", makeField("Other", makeInt(5)), makeField("ID", makeInt(1))),
 	)
 
 	got := All(items, "[Count==5]")
@@ -1032,7 +1032,7 @@ func TestFilterNumBadPattern(t *testing.T) {
 // TestFilterNumStringFieldRejected verifies that StringValue is not matched by numeric ops.
 func TestFilterNumStringFieldRejected(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Name", makeString("5")), field_("ID", makeInt(1))),
+		makeStruct("Item", makeField("Name", makeString("5")), makeField("ID", makeInt(1))),
 	)
 
 	got := All(items, "[Name==5]")
@@ -1042,7 +1042,7 @@ func TestFilterNumStringFieldRejected(t *testing.T) {
 // TestFilterNumNilValueRejected verifies that NilValue is not matched by numeric ops.
 func TestFilterNumNilValueRejected(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Count", gobspect.NilValue{}), field_("ID", makeInt(1))),
+		makeStruct("Item", makeField("Count", gobspect.NilValue{}), makeField("ID", makeInt(1))),
 	)
 
 	got := All(items, "[Count==0]")
@@ -1054,7 +1054,7 @@ func TestFilterNumNilValueRejected(t *testing.T) {
 // TestFilterORBothMatch verifies two-way OR returns true when both alternatives match.
 func TestFilterORBothMatch(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Status", makeString("active")), field_("ID", makeInt(1))),
+		makeStruct("Item", makeField("Status", makeString("active")), makeField("ID", makeInt(1))),
 	)
 
 	got := All(items, "[Status=active]|[Status=pending]")
@@ -1065,8 +1065,8 @@ func TestFilterORBothMatch(t *testing.T) {
 // TestFilterOROneMatch verifies two-way OR returns true when only one alternative matches.
 func TestFilterOROneMatch(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Status", makeString("pending")), field_("ID", makeInt(1))),
-		makeStruct("Item", field_("Status", makeString("done")), field_("ID", makeInt(2))),
+		makeStruct("Item", makeField("Status", makeString("pending")), makeField("ID", makeInt(1))),
+		makeStruct("Item", makeField("Status", makeString("done")), makeField("ID", makeInt(2))),
 	)
 
 	got := All(items, "[Status=active]|[Status=pending]")
@@ -1077,7 +1077,7 @@ func TestFilterOROneMatch(t *testing.T) {
 // TestFilterORNeitherMatch verifies two-way OR returns false when neither alternative matches.
 func TestFilterORNeitherMatch(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Status", makeString("done")), field_("ID", makeInt(1))),
+		makeStruct("Item", makeField("Status", makeString("done")), makeField("ID", makeInt(1))),
 	)
 
 	got := All(items, "[Status=active]|[Status=pending]")
@@ -1087,8 +1087,8 @@ func TestFilterORNeitherMatch(t *testing.T) {
 // TestFilterORThreeWayMiddleMatch verifies three-way OR returns true when the middle alternative matches.
 func TestFilterORThreeWayMiddleMatch(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Status", makeString("B")), field_("ID", makeInt(1))),
-		makeStruct("Item", field_("Status", makeString("none")), field_("ID", makeInt(2))),
+		makeStruct("Item", makeField("Status", makeString("B")), makeField("ID", makeInt(1))),
+		makeStruct("Item", makeField("Status", makeString("none")), makeField("ID", makeInt(2))),
 	)
 
 	got := All(items, "[Status=A]|[Status=B]|[Status=C]")
@@ -1100,10 +1100,10 @@ func TestFilterORThreeWayMiddleMatch(t *testing.T) {
 // elements match different alternatives.
 func TestFilterORInAllSlice(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Order", field_("Status", makeString("active")), field_("ID", makeInt(1))),
-		makeStruct("Order", field_("Status", makeString("pending")), field_("ID", makeInt(2))),
-		makeStruct("Order", field_("Status", makeString("done")), field_("ID", makeInt(3))),
-		makeStruct("Order", field_("Status", makeString("active")), field_("ID", makeInt(4))),
+		makeStruct("Order", makeField("Status", makeString("active")), makeField("ID", makeInt(1))),
+		makeStruct("Order", makeField("Status", makeString("pending")), makeField("ID", makeInt(2))),
+		makeStruct("Order", makeField("Status", makeString("done")), makeField("ID", makeInt(3))),
+		makeStruct("Order", makeField("Status", makeString("active")), makeField("ID", makeInt(4))),
 	)
 
 	got := All(items, "[Status=active]|[Status=pending]")
@@ -1113,9 +1113,9 @@ func TestFilterORInAllSlice(t *testing.T) {
 // TestFilterORInGet verifies OR inside Get returns first matching element.
 func TestFilterORInGet(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Status", makeString("done")), field_("ID", makeInt(1))),
-		makeStruct("Item", field_("Status", makeString("pending")), field_("ID", makeInt(2))),
-		makeStruct("Item", field_("Status", makeString("active")), field_("ID", makeInt(3))),
+		makeStruct("Item", makeField("Status", makeString("done")), makeField("ID", makeInt(1))),
+		makeStruct("Item", makeField("Status", makeString("pending")), makeField("ID", makeInt(2))),
+		makeStruct("Item", makeField("Status", makeString("active")), makeField("ID", makeInt(3))),
 	)
 
 	v, ok := Get(items, "[Status=active]|[Status=pending].ID")
@@ -1134,20 +1134,20 @@ func TestFilterORPrecededByAND(t *testing.T) {
 	// Sub field (which is a nested slice).
 	items := makeSlice(
 		// Status=active, Sub has Category=A: second filter matches
-		makeStruct("Item", field_("Status", makeString("active")), field_("Sub", makeSlice(
-			makeStruct("Sub", field_("Category", makeString("A")), field_("ID", makeInt(1))),
+		makeStruct("Item", makeField("Status", makeString("active")), makeField("Sub", makeSlice(
+			makeStruct("Sub", makeField("Category", makeString("A")), makeField("ID", makeInt(1))),
 		))),
 		// Status=active, Sub has Category=B: second filter matches
-		makeStruct("Item", field_("Status", makeString("active")), field_("Sub", makeSlice(
-			makeStruct("Sub", field_("Category", makeString("B")), field_("ID", makeInt(2))),
+		makeStruct("Item", makeField("Status", makeString("active")), makeField("Sub", makeSlice(
+			makeStruct("Sub", makeField("Category", makeString("B")), makeField("ID", makeInt(2))),
 		))),
 		// Status=inactive: first filter excludes this
-		makeStruct("Item", field_("Status", makeString("inactive")), field_("Sub", makeSlice(
-			makeStruct("Sub", field_("Category", makeString("A")), field_("ID", makeInt(3))),
+		makeStruct("Item", makeField("Status", makeString("inactive")), makeField("Sub", makeSlice(
+			makeStruct("Sub", makeField("Category", makeString("A")), makeField("ID", makeInt(3))),
 		))),
 		// Status=active, Sub has Category=C: second filter excludes
-		makeStruct("Item", field_("Status", makeString("active")), field_("Sub", makeSlice(
-			makeStruct("Sub", field_("Category", makeString("C")), field_("ID", makeInt(4))),
+		makeStruct("Item", makeField("Status", makeString("active")), makeField("Sub", makeSlice(
+			makeStruct("Sub", makeField("Category", makeString("C")), makeField("ID", makeInt(4))),
 		))),
 	)
 
@@ -1160,10 +1160,10 @@ func TestFilterORPrecededByAND(t *testing.T) {
 // TestFilterORInWildcardDescent verifies OR filter works inside wildcard descent.
 func TestFilterORInWildcardDescent(t *testing.T) {
 	root := makeStruct("Root",
-		field_("Items", makeSlice(
-			makeStruct("Item", field_("Status", makeString("active")), field_("ID", makeInt(1))),
-			makeStruct("Item", field_("Status", makeString("pending")), field_("ID", makeInt(2))),
-			makeStruct("Item", field_("Status", makeString("done")), field_("ID", makeInt(3))),
+		makeField("Items", makeSlice(
+			makeStruct("Item", makeField("Status", makeString("active")), makeField("ID", makeInt(1))),
+			makeStruct("Item", makeField("Status", makeString("pending")), makeField("ID", makeInt(2))),
+			makeStruct("Item", makeField("Status", makeString("done")), makeField("ID", makeInt(3))),
 		)),
 	)
 
@@ -1176,8 +1176,8 @@ func TestFilterORInWildcardDescent(t *testing.T) {
 // TestFilterBoolEqEdgeCases is a table-driven test covering bool filter matching,
 // case-insensitive literal parsing, and parse-time rejection of invalid literals.
 func TestFilterBoolEqEdgeCases(t *testing.T) {
-	trueItem := makeStruct("Item", field_("Enabled", makeBool(true)), field_("ID", makeInt(1)))
-	falseItem := makeStruct("Item", field_("Enabled", makeBool(false)), field_("ID", makeInt(2)))
+	trueItem := makeStruct("Item", makeField("Enabled", makeBool(true)), makeField("ID", makeInt(1)))
+	falseItem := makeStruct("Item", makeField("Enabled", makeBool(false)), makeField("ID", makeInt(2)))
 	both := makeSlice(trueItem, falseItem)
 
 	matchCases := []struct {

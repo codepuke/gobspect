@@ -421,13 +421,8 @@ func TestRun_NoOsStatAmbiguity(t *testing.T) {
 	stdinData := gobStream(t, Orders{Orders: "pending"}, 1)
 
 	var stdout, stderr bytes.Buffer
-	// Pass "Orders" as a positional arg. With the old os.Stat logic, this would
-	// be treated as a file because filePath/Orders exists — but we are NOT
-	// passing the full path, we are passing the bare name "Orders".
-	// The point is: gq must NOT perform os.Stat on positional args. Because
-	// "Orders" does not resolve to an existing path in the working directory,
-	// it should be treated as a query regardless. The test directory is not the
-	// cwd, so "Orders" does not exist in cwd.
+	// "Orders" names both a struct field and a file in the temp dir. gq must
+	// not os.Stat positional args, so the bare name is a query, not a path.
 	exitCode := run([]string{"Orders"}, stdinData, &stdout, &stderr)
 
 	assert.Equal(t, 0, exitCode, "unexpected exit code; stderr: %s", stderr.String())

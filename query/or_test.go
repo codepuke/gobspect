@@ -38,14 +38,12 @@ func TestORGroupSeedCorpus(t *testing.T) {
 			}
 			require.NoError(t, err, "unexpected error for %q", tt.expr)
 
-			// Round-trip stability
+			// String() must round-trip to an identical AST, not merely to an
+			// expression that means the same thing.
 			s1 := p.String()
 			p2, err := Parse(s1)
 			require.NoError(t, err, "re-parse failed for %q (s1=%q)", tt.expr, s1)
 
-			// We use reflect.DeepEqual to check AST identity.
-			// Note: if the parser or String() normalization changes the AST, this might fail
-			// but for these cases it should be identical.
 			if !reflect.DeepEqual(p, p2) {
 				t.Errorf("AST drift for %q\nGOT:  %+v\nWANT: %+v", tt.expr, p2, p)
 			}

@@ -320,9 +320,9 @@ func TestStream_MessagesCountsAndOffsets(t *testing.T) {
 	assert.LessOrEqual(t, int(last.Offset)+last.BodyLen, rawLen+16)
 }
 
-// TestStream_MessagesOnlyReadsFraming verifies that Messages does not force a
-// full value decode — we can iterate past a message whose body would fail to
-// decode as a value, as long as its framing is well-formed.
+// TestStream_MessagesSecondCallPanics verifies that Messages, like the other
+// stream iterators, panics rather than silently yielding nothing when called a
+// second time on an exhausted stream.
 func TestStream_MessagesSecondCallPanics(t *testing.T) {
 	buf := encodeStream(t, streamPoint{X: 1, Y: 2})
 
@@ -344,19 +344,11 @@ func TestStream_MessagesSecondCallPanics(t *testing.T) {
 // TestStream_ErrorMessageIncludesOffset verifies that value-level decode
 // errors are wrapped with message index and byte offset context.
 func TestStream_ErrorMessageIncludesOffset(t *testing.T) {
-	// Encode a valid stream, then append a corrupt value-body message.
+	// Encode a valid stream, then truncate it mid-value: dropping the final
+	// byte of the last message body makes decodeTopLevelValue fail partway
+	// through, which is exactly the case the offset context is meant to
+	// describe.
 	buf := encodeStream(t, streamPoint{X: 1, Y: 2})
-
-	// Append a hand-crafted message: length prefix = 2, body = {0x02, 0xff}
-	// where 0x02 is a positive type ID for type 1 (bool) in the top-level
-	// slot (valid framing), but the type has never been defined for this
-	// stream at that ID (it's in fact the builtin bool, which DOES decode),
-	// hmm — let's pick an ID we haven't defined: 0x40 = 32 which neither
-	// builtin nor defined. Zig-zag encoded, 32 maps to raw int 0x40 → uint 64 →
-	// gob: one byte 0xC0 means "next byte is 1" ... easier to truncate the
-	// last message body.
-	// Simpler path: truncate the stream mid-value. Our last value is 4 bytes;
-	// drop the final byte so decodeTopLevelValue will fail mid-stream.
 	orig := buf.Bytes()
 	truncated := bytes.NewReader(orig[:len(orig)-1])
 

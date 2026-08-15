@@ -39,14 +39,11 @@ func TestDecodeStructValue_LargeDeltaNoPanic(t *testing.T) {
 	assert.Contains(t, err.Error(), "out of range")
 }
 
-// TestDecodeStructValue_DeltaExactlyLenFields ensures a delta equal to the
-// field count (one past the last valid index) is also rejected cleanly.
+// TestDecodeStructValue_DeltaEqualToFieldCount_Error ensures an oversized field
+// delta is rejected on the uint64 delta itself, before any conversion to int.
 func TestDecodeStructValue_DeltaEqualToFieldCount_Error(t *testing.T) {
-	// struct with 2 fields; delta=2 from fieldIdx=-1 → fieldIdx=1 which is
-	// valid (field index 1 of 0..1). Delta=3 → fieldIdx=2 → out of range.
-	//
-	// Here we test delta == len(Fields) == 2, which is rejected before the int
-	// cast by the new guard (delta > uint64(len(def.Fields))).
+	// Deltas run from fieldIdx=-1, so for a 2-field struct delta=2 lands on the
+	// last valid index and delta=3 is one past the end.
 	def := &wireStructType{
 		Common: wireCommonType{Name: "TwoFields"},
 		Fields: []wireFieldType{
@@ -54,8 +51,7 @@ func TestDecodeStructValue_DeltaEqualToFieldCount_Error(t *testing.T) {
 			{Name: "B", ID: 2},
 		},
 	}
-	// Encode delta=3 as a single-byte gob uint (3 < 128).
-	deltaBytes := []byte{3} // delta=3 > len(Fields)=2 → rejected
+	deltaBytes := []byte{3} // gob encodes uints below 128 as a single byte
 
 	ins := New()
 	sd := newStreamDecoder(wrapWithLimit(bytes.NewReader(nil), 0))

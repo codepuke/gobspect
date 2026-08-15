@@ -71,14 +71,14 @@ func assertORGroupInvariant(t *testing.T, p Path) {
 func exerciseMatching(t *testing.T, p Path) {
 	// Fixed test fixture covering various types.
 	fixture := makeStruct("Fixture",
-		field_("a", makeInt(1)),
-		field_("b", makeInt(2)),
-		field_("c", makeInt(3)),
-		field_("Name", makeString("a|b")),
-		field_("Other", makeString("x")),
-		field_("Status", makeString("active")),
-		field_("Enabled", makeBool(true)),
-		field_("Tags", makeSlice(makeString("devops"), makeString("cloud"))),
+		makeField("a", makeInt(1)),
+		makeField("b", makeInt(2)),
+		makeField("c", makeInt(3)),
+		makeField("Name", makeString("a|b")),
+		makeField("Other", makeString("x")),
+		makeField("Status", makeString("active")),
+		makeField("Enabled", makeBool(true)),
+		makeField("Tags", makeSlice(makeString("devops"), makeString("cloud"))),
 	)
 
 	// Also generate some random values to test against.

@@ -73,7 +73,7 @@ func TestContainsFilterInterfaceWrappedMapKeys(t *testing.T) {
 		entry(wrapped("string", makeString("devops")), makeBool(true)),
 		entry(wrapped("string", makeString("cloud")), makeBool(true)),
 	)
-	items := makeSlice(makeStruct("Item", field_("Tags", tags)))
+	items := makeSlice(makeStruct("Item", makeField("Tags", tags)))
 
 	require.Len(t, All(items, "[Tags~devops]"), 1)
 	require.Len(t, All(items, "[Tags~missing]"), 0)

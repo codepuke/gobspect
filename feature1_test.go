@@ -157,23 +157,18 @@ func TestAnonymousDecoders_FirstSuccessWins(t *testing.T) {
 }
 
 func TestAnonymousDecoders_NamedLookupNotAffected(t *testing.T) {
-	// A named decoder ("" is no longer valid as a named key for anonymous dispatch;
-	// non-empty named decoders should still work for typed opaques).
-	// Here we test that a registered named decoder for a known type still fires.
+	// gobEncoderType is encoded directly, so its TypeName is empty and the
+	// anonymous decoder is the one that should fire — a registered named
+	// decoder must not divert it.
 	buf := gobEncode(t, &gobEncoderType{S: "named"})
 	ins := gobspect.New()
-	// Register an anonymous decoder that would win for empty-named opaques.
 	ins.RegisterUnnamedDecoder(echoDecoder("anon:"))
-	// The gobEncoderType has TypeName="" so anonymous decoders apply.
-	// We want to verify that registering an anon decoder doesn't break named ones.
-	// Also register a named decoder under a made-up key to confirm named still works.
 	ins.RegisterDecoder("myType", echoDecoder("named:"))
 
 	vals, err := ins.Stream(buf).Collect()
 	require.NoError(t, err)
 	require.Len(t, vals, 1)
 	ov := vals[0].(gobspect.OpaqueValue)
-	// The anonymous decoder should fire since TypeName is empty.
 	assert.Equal(t, "anon:named", ov.Decoded)
 }
 

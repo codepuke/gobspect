@@ -104,26 +104,23 @@ func TestRoundTripCorpus(t *testing.T) {
 
 	for _, tc := range corpus {
 		t.Run(tc.name, func(t *testing.T) {
-			// Step 1: Parse the input.
 			p1, err := Parse(tc.input)
 			if err != nil {
 				t.Fatalf("Parse(%q) failed: %v", tc.input, err)
 			}
 
-			// Step 2: String() → re-parse.
 			s1 := p1.String()
 			p2, err := Parse(s1)
 			if err != nil {
 				t.Fatalf("Parse(String(%q)) = Parse(%q) failed: %v", tc.input, s1, err)
 			}
 
-			// Step 3: Deep equality of the two parsed paths.
 			if !reflect.DeepEqual(p1.segs, p2.segs) {
 				t.Errorf("segments not equal after round-trip of %q\n  String()=%q\n  p1.segs=%+v\n  p2.segs=%+v",
 					tc.input, s1, p1.segs, p2.segs)
 			}
 
-			// Step 4: String() stability — second String() must equal first.
+			// A second String() must match the first.
 			s2 := p2.String()
 			if s1 != s2 {
 				t.Errorf("String() not stable for %q\n  first =%q\n  second=%q",

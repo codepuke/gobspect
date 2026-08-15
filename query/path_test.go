@@ -1035,10 +1035,8 @@ func TestParseZeroSegmentFromNonEmptyExpr(t *testing.T) {
 	_, err := Parse("")
 	require.NoError(t, err)
 
-	// A non-empty string that somehow yields no segments should error.
-	// (This is a belt-and-suspenders test for the internal guard.)
-	// The filter bracket alone with no content is already caught by parseFilter,
-	// so we test other odd inputs here.
+	// A lone separator is non-empty but yields no segments, which the guard
+	// must turn into an error rather than an empty path.
 	_, err = Parse(".")
 	require.Error(t, err)
 }
@@ -1181,17 +1179,10 @@ func TestUnquotePatternEscapeSequences(t *testing.T) {
 	}
 }
 
-// TestParseSegmentsNoSegmentsFromNonEmpty verifies the internal guard that detects
-// a non-empty expression that produced zero segments. This fires for a lone '['
-// that parseFilter rejects before appending — tested via the OR-error path where
-// '|' appears without a preceding '['. Another internal path: if we somehow reach
-// the post-loop len(segs)==0 check, that returns parseErr(-1, ...). The only way to
-// trigger it from the public API is an expression that starts with '[' and then has
-// the OR alternative fail, but that actually errors earlier. The Pos==-1 guard in
-// parseErr is tested via TestParseErrorNegativePos. We verify here that an expression
-// that consists solely of OR-pipe content errors correctly.
+// TestParseSegmentsOrAltError verifies that an error inside an OR alternative
+// propagates out of the alternative-collection loop rather than being swallowed
+// and leaving a partially-built segment behind.
 func TestParseSegmentsOrAltError(t *testing.T) {
-	// A '[' that starts an OR chain but the OR alternative itself has an error.
 	_, err := Parse("[A!]|[unclosed")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unclosed '['")

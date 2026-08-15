@@ -179,16 +179,17 @@ func TestFormat_WithMaxBytes(t *testing.T) {
 }
 
 func TestFormat_WithMaxBytes_PrintableUTF8(t *testing.T) {
-	// Create a 1 MiB valid printable UTF-8 byte slice
+	// 1 MiB of printable UTF-8, which would otherwise take the shortcut that
+	// renders byte slices as a string and bypasses MaxBytes entirely.
 	large := make([]byte, 1024*1024)
 	for i := range large {
-		large[i] = 'A' // 'A' is printable UTF-8
+		large[i] = 'A'
 	}
 
 	got := formatFirst(t, WrapBytes{V: large}, gobspect.WithMaxBytes(64))
 
-	// Right now the length is likely > 1MiB because it's untruncated.
-	// The assertion should cap checking length instead of dumping a huge string.
+	// Assert on the length rather than the content: a failure here must not
+	// dump a megabyte of output.
 	assert.Less(t, len(got), 1024, "Output should be bounded and not render the entire 1 MiB slice")
 	assert.Contains(t, got, "…")
 }
@@ -933,9 +934,8 @@ func TestFormatSchema_NilTypeRef(t *testing.T) {
 	assert.Contains(t, got, "type BadMap map[?]?")
 }
 
-// TestFormatSchema_UnknownElemRefRenders as "?" when the elem TypeRef ID is not
-// in the byID map and the TypeRef has no Name set. Exercises the schemaTypeExpr
-// "not found, empty name" path.
+// TestFormatSchema_UnknownElemRef verifies that an elem TypeRef whose ID is
+// absent from the byID map and which carries no Name renders as "?".
 func TestFormatSchema_UnknownElemRef(t *testing.T) {
 	holder := gobspect.TypeInfo{
 		ID:   700,
@@ -1470,17 +1470,10 @@ func TestFormat_ANSIColor(t *testing.T) {
 	}
 	got := gobspect.Format(v, gobspect.WithColor(gobspect.ANSIColorScheme))
 
-	// Field names should be wrapped in green.
 	assert.Contains(t, got, "\x1b[32mName\x1b[0m", "field name should be green")
 	assert.Contains(t, got, "\x1b[32mAge\x1b[0m", "field name should be green")
-
-	// Type header should be wrapped in bold cyan (braces are separate, plain).
-	assert.Contains(t, got, "\x1b[1;36mMyStruct\x1b[0m{", "type header should be bold cyan")
-
-	// String value should be wrapped in yellow.
+	assert.Contains(t, got, "\x1b[1;36mMyStruct\x1b[0m{", "type header should be bold cyan (braces plain)")
 	assert.Contains(t, got, "\x1b[33m\"alice\"\x1b[0m", "string value should be yellow")
-
-	// Number value should be wrapped in magenta.
 	assert.Contains(t, got, "\x1b[35m30\x1b[0m", "number value should be magenta")
 }
 
@@ -1574,13 +1567,9 @@ func TestSchema_Format_WithColor(t *testing.T) {
 
 	got := schema.Format(gobspect.SchemaWithColor(gobspect.ANSIColorScheme))
 
-	// Type names should be bold cyan.
 	assert.Contains(t, got, "\x1b[1;36m", "schema type name should be bold cyan")
-	// "type" keyword should be magenta (Number style).
 	assert.Contains(t, got, "\x1b[35mtype\x1b[0m", "schema 'type' keyword should be magenta")
-	// Field names should be green (FieldName style).
 	assert.Contains(t, got, "\x1b[32m", "schema field names should be green")
-	// No ANSI codes in plain string.
 	plainGot := schema.Format()
 	assert.NotContains(t, plainGot, "\x1b[", "plain schema.Format() should not contain ANSI codes")
 }
@@ -1609,10 +1598,8 @@ func TestSchema_Format_WithIndent(t *testing.T) {
 
 	got := schema.Format(gobspect.SchemaWithIndent("\t"))
 
-	// Fields in the NamedPoint struct should be tab-indented.
 	assert.Contains(t, got, "\tName", "fields should be tab-indented")
 	assert.Contains(t, got, "\tPt", "fields should be tab-indented")
-	// Should not contain two-space indent (the default).
 	assert.NotContains(t, got, "  Name", "should not use two-space indent when tab is specified")
 }
 
@@ -1657,8 +1644,7 @@ func TestFormat_ANSIColor_InlineCollection(t *testing.T) {
 	got := formatFirst(t, IntSlice{1, 2, 3}, gobspect.WithColor(gobspect.ANSIColorScheme))
 	// Inline slice: "[]int{1, 2, 3}" — TypeHeader wraps "[]int", braces are plain.
 	assert.Contains(t, got, "\x1b[1;36m[]int\x1b[0m{", "inline slice header should be bold cyan")
-	// Numbers should be wrapped in magenta.
-	assert.Contains(t, got, "\x1b[35m1\x1b[0m")
+	assert.Contains(t, got, "\x1b[35m1\x1b[0m", "inline numbers should be magenta")
 }
 
 // TestFormat_ANSIColor_NoColorDoesNotChangeExisting verifies that the existing

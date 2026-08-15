@@ -464,18 +464,14 @@ func TestDecodeInterface_MalformedZeroLengthValue(t *testing.T) {
 	msgs := splitGobMessages(t, original)
 
 	lastMsg := msgs[len(msgs)-1]
-	// Locate the concreteTypeID (which is 0x04 for MyInt) and clear the valueLen byte that follows it.
-	// Since MyInt is registered in init(), it takes the next available built-in type ID after complex128, which happens to be ID 65 for user types.
-	// Wait, actually MyInt is encoded as a new type name, so we can just search for "MyInt" in the message.
+	// The interface value carries its concrete type name inline, so the name
+	// itself is a reliable anchor: concreteTypeID follows it, then valueLen.
 	idx := bytes.Index(lastMsg, []byte("MyInt"))
 	require.NotEqual(t, -1, idx, "MyInt type name not found in message")
 	idx += 5 // skip "MyInt"
 
-	// The next byte is the concreteTypeID
 	require.Equal(t, byte(0x04), lastMsg[idx], "expected concreteTypeID to be 0x04")
-
-	// The byte after concreteTypeID is the valueLen. We set it to 0.
-	lastMsg[idx+1] = 0x00
+	lastMsg[idx+1] = 0x00 // zero the valueLen
 
 	reordered := reassembleStream(msgs)
 

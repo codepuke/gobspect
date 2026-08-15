@@ -26,7 +26,7 @@ func TestAllPathEmptyPath(t *testing.T) {
 // TestAllPathWildcardOnSlice verifies * expands all elements of a SliceValue.
 func TestAllPathWildcardOnSlice(t *testing.T) {
 	slice := makeSlice(makeString("a"), makeString("b"), makeString("c"))
-	root := makeStruct("Root", field_("Items", slice))
+	root := makeStruct("Root", makeField("Items", slice))
 
 	got := All(root, "Items.*")
 	require.Len(t, got, 3)
@@ -38,7 +38,7 @@ func TestAllPathWildcardOnSlice(t *testing.T) {
 // TestAllPathWildcardOnArray verifies * expands all elements of an ArrayValue.
 func TestAllPathWildcardOnArray(t *testing.T) {
 	arr := makeArray(makeInt(10), makeInt(20), makeInt(30))
-	root := makeStruct("Root", field_("Arr", arr))
+	root := makeStruct("Root", makeField("Arr", arr))
 
 	got := All(root, "Arr.*")
 	require.Len(t, got, 3)
@@ -53,7 +53,7 @@ func TestAllPathWildcardOnMap(t *testing.T) {
 		entry(makeString("x"), makeInt(1)),
 		entry(makeString("y"), makeInt(2)),
 	)
-	root := makeStruct("Root", field_("Meta", m))
+	root := makeStruct("Root", makeField("Meta", m))
 
 	got := All(root, "Meta.*")
 	require.Len(t, got, 2)
@@ -66,11 +66,11 @@ func TestAllPathWildcardOnMap(t *testing.T) {
 // TestAllPathNestedWildcard covers the PRD example: Orders.*.Customer.Name
 func TestAllPathNestedWildcard(t *testing.T) {
 	orders := makeSlice(
-		makeStruct("Order", field_("Customer", makeStruct("Customer", field_("Name", makeString("Alice"))))),
-		makeStruct("Order", field_("Customer", makeStruct("Customer", field_("Name", makeString("Bob"))))),
-		makeStruct("Order", field_("Customer", makeStruct("Customer", field_("Name", makeString("Carol"))))),
+		makeStruct("Order", makeField("Customer", makeStruct("Customer", makeField("Name", makeString("Alice"))))),
+		makeStruct("Order", makeField("Customer", makeStruct("Customer", makeField("Name", makeString("Bob"))))),
+		makeStruct("Order", makeField("Customer", makeStruct("Customer", makeField("Name", makeString("Carol"))))),
 	)
-	root := makeStruct("Root", field_("Orders", orders))
+	root := makeStruct("Root", makeField("Orders", orders))
 
 	got := All(root, "Orders.*.Customer.Name")
 	require.Len(t, got, 3)
@@ -85,7 +85,7 @@ func TestAllPathMultiWildcard(t *testing.T) {
 	inner0 := makeSlice(makeInt(1), makeInt(2))
 	inner1 := makeSlice(makeInt(3), makeInt(4))
 	outer := makeSlice(inner0, inner1)
-	root := makeStruct("Root", field_("Matrix", outer))
+	root := makeStruct("Root", makeField("Matrix", outer))
 
 	got := All(root, "Matrix.*.*")
 	require.Len(t, got, 4)
@@ -98,8 +98,8 @@ func TestAllPathMultiWildcard(t *testing.T) {
 // TestAllPathWildcardBeforeField covers wildcard followed by a field segment.
 func TestAllPathWildcardBeforeField(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Price", makeInt(10))),
-		makeStruct("Item", field_("Price", makeInt(20))),
+		makeStruct("Item", makeField("Price", makeInt(10))),
+		makeStruct("Item", makeField("Price", makeInt(20))),
 	)
 
 	got := All(items, "*.Price")
@@ -129,10 +129,10 @@ func TestAllPathWildcardBeforeIndex(t *testing.T) {
 func TestAllPathInterfaceValueTransparency(t *testing.T) {
 	// Slice of interface-wrapped structs.
 	slice := makeSlice(
-		wrapped("Item", makeStruct("Item", field_("Name", makeString("X")))),
-		wrapped("Item", makeStruct("Item", field_("Name", makeString("Y")))),
+		wrapped("Item", makeStruct("Item", makeField("Name", makeString("X")))),
+		wrapped("Item", makeStruct("Item", makeField("Name", makeString("Y")))),
 	)
-	root := makeStruct("Root", field_("Items", slice))
+	root := makeStruct("Root", makeField("Items", slice))
 
 	got := All(root, "Items.*.Name")
 	require.Len(t, got, 2)
@@ -157,7 +157,7 @@ func TestAllPathInterfaceValueAtRoot(t *testing.T) {
 // TestAllPathEmptyResultOnEmptySlice verifies nil is returned for an empty slice.
 func TestAllPathEmptyResultOnEmptySlice(t *testing.T) {
 	slice := makeSlice() // zero elements
-	root := makeStruct("Root", field_("Items", slice))
+	root := makeStruct("Root", makeField("Items", slice))
 
 	got := All(root, "Items.*")
 	assert.Nil(t, got)
@@ -166,7 +166,7 @@ func TestAllPathEmptyResultOnEmptySlice(t *testing.T) {
 // TestAllPathEmptyResultOnEmptyMap verifies nil is returned for an empty map.
 func TestAllPathEmptyResultOnEmptyMap(t *testing.T) {
 	m := makeMap() // zero entries
-	root := makeStruct("Root", field_("Meta", m))
+	root := makeStruct("Root", makeField("Meta", m))
 
 	got := All(root, "Meta.*")
 	assert.Nil(t, got)
@@ -176,10 +176,10 @@ func TestAllPathEmptyResultOnEmptyMap(t *testing.T) {
 // doesn't exist on any expanded element.
 func TestAllPathEmptyResultMissingField(t *testing.T) {
 	items := makeSlice(
-		makeStruct("Item", field_("Price", makeInt(10))),
-		makeStruct("Item", field_("Price", makeInt(20))),
+		makeStruct("Item", makeField("Price", makeInt(10))),
+		makeStruct("Item", makeField("Price", makeInt(20))),
 	)
-	root := makeStruct("Root", field_("Items", items))
+	root := makeStruct("Root", makeField("Items", items))
 
 	got := All(root, "Items.*.Missing")
 	assert.Nil(t, got)
@@ -188,7 +188,7 @@ func TestAllPathEmptyResultMissingField(t *testing.T) {
 // TestAllPathEmptyResultMissingPath verifies nil is returned when path does
 // not resolve at all.
 func TestAllPathEmptyResultMissingPath(t *testing.T) {
-	root := makeStruct("Root", field_("Name", makeString("hi")))
+	root := makeStruct("Root", makeField("Name", makeString("hi")))
 
 	got := All(root, "Missing.*")
 	assert.Nil(t, got)
@@ -199,11 +199,11 @@ func TestAllPathEmptyResultMissingPath(t *testing.T) {
 func TestAllPathPartialMiss(t *testing.T) {
 	// Mix of structs: some have "Name", some don't.
 	items := makeSlice(
-		makeStruct("Item", field_("Name", makeString("Alice"))),
-		makeStruct("Item", field_("Price", makeInt(42))), // no Name
-		makeStruct("Item", field_("Name", makeString("Bob"))),
+		makeStruct("Item", makeField("Name", makeString("Alice"))),
+		makeStruct("Item", makeField("Price", makeInt(42))), // no Name
+		makeStruct("Item", makeField("Name", makeString("Bob"))),
 	)
-	root := makeStruct("Root", field_("Items", items))
+	root := makeStruct("Root", makeField("Items", items))
 
 	got := All(root, "Items.*.Name")
 	require.Len(t, got, 2)
@@ -259,7 +259,7 @@ func TestAllPanicsOnInvalidSyntax(t *testing.T) {
 // TestAllDoesNotPanicOnMissing verifies All returns nil (not a panic) for a
 // valid path that does not resolve.
 func TestAllDoesNotPanicOnMissing(t *testing.T) {
-	root := makeStruct("Root", field_("Name", makeString("hi")))
+	root := makeStruct("Root", makeField("Name", makeString("hi")))
 	assert.NotPanics(t, func() {
 		got := All(root, "Missing.*")
 		assert.Nil(t, got)
@@ -271,7 +271,7 @@ func TestAllDoesNotPanicOnMissing(t *testing.T) {
 // TestAllPathPreCompiled verifies AllPath with a pre-compiled Path.
 func TestAllPathPreCompiled(t *testing.T) {
 	slice := makeSlice(makeInt(1), makeInt(2), makeInt(3))
-	root := makeStruct("Root", field_("Nums", slice))
+	root := makeStruct("Root", makeField("Nums", slice))
 
 	p, err := Parse("Nums.*")
 	require.NoError(t, err)
@@ -290,12 +290,12 @@ func TestAllPathPreCompiled(t *testing.T) {
 func TestAllPathFieldWildcardField(t *testing.T) {
 	// Orders.0.Items.*.Price
 	items := makeSlice(
-		makeStruct("Item", field_("Price", makeInt(5))),
-		makeStruct("Item", field_("Price", makeInt(15))),
+		makeStruct("Item", makeField("Price", makeInt(5))),
+		makeStruct("Item", makeField("Price", makeInt(15))),
 	)
-	order0 := makeStruct("Order", field_("Items", items))
+	order0 := makeStruct("Order", makeField("Items", items))
 	orders := makeSlice(order0)
-	root := makeStruct("Root", field_("Orders", orders))
+	root := makeStruct("Root", makeField("Orders", orders))
 
 	got := All(root, "Orders.0.Items.*.Price")
 	require.Len(t, got, 2)
@@ -310,7 +310,7 @@ func TestAllPathNegativeIndexThenWildcard(t *testing.T) {
 		makeSlice(makeString("first0"), makeString("first1")),
 		inner,
 	)
-	root := makeStruct("Root", field_("Matrix", outer))
+	root := makeStruct("Root", makeField("Matrix", outer))
 
 	// Matrix.-1.* should expand the last inner slice.
 	got := All(root, "Matrix.-1.*")
@@ -325,11 +325,11 @@ func TestAllPathNegativeIndexThenWildcard(t *testing.T) {
 // across multiple depths in depth-first pre-order (shallowest first).
 func TestAllDescentCollectsMultipleDepths(t *testing.T) {
 	// root.Price = 1, root.A.Price = 2, root.A.B.Price = 3
-	deepest := makeStruct("C", field_("Price", makeInt(3)))
-	mid := makeStruct("B", field_("Price", makeInt(2)), field_("B", deepest))
+	deepest := makeStruct("C", makeField("Price", makeInt(3)))
+	mid := makeStruct("B", makeField("Price", makeInt(2)), makeField("B", deepest))
 	root := makeStruct("Root",
-		field_("Price", makeInt(1)),
-		field_("A", mid),
+		makeField("Price", makeInt(1)),
+		makeField("A", mid),
 	)
 
 	got := All(root, "..Price")
@@ -342,7 +342,7 @@ func TestAllDescentCollectsMultipleDepths(t *testing.T) {
 // TestAllDescentNoMatch verifies ..Name returns nil when field absent everywhere.
 func TestAllDescentNoMatch(t *testing.T) {
 	root := makeStruct("Root",
-		field_("A", makeStruct("A", field_("B", makeInt(1)))),
+		makeField("A", makeStruct("A", makeField("B", makeInt(1)))),
 	)
 	got := All(root, "..Missing")
 	assert.Nil(t, got)
@@ -353,11 +353,11 @@ func TestAllDescentNoMatch(t *testing.T) {
 func TestAllDescentInStructAndMap(t *testing.T) {
 	// root.Price = 10
 	// root.Meta (map) has entry "sub" → struct with Price = 20
-	subStruct := makeStruct("Sub", field_("Price", makeInt(20)))
+	subStruct := makeStruct("Sub", makeField("Price", makeInt(20)))
 	m := makeMap(entry(makeString("sub"), subStruct))
 	root := makeStruct("Root",
-		field_("Price", makeInt(10)),
-		field_("Meta", m),
+		makeField("Price", makeInt(10)),
+		makeField("Meta", m),
 	)
 
 	got := All(root, "..Price")
@@ -368,10 +368,10 @@ func TestAllDescentInStructAndMap(t *testing.T) {
 
 // TestAllDescentFollowedByFilter verifies ..Orders[Status=active] works.
 func TestAllDescentFollowedByFilter(t *testing.T) {
-	active := makeStruct("Order", field_("Status", makeString("active")), field_("ID", makeInt(1)))
-	inactive := makeStruct("Order", field_("Status", makeString("inactive")), field_("ID", makeInt(2)))
+	active := makeStruct("Order", makeField("Status", makeString("active")), makeField("ID", makeInt(1)))
+	inactive := makeStruct("Order", makeField("Status", makeString("inactive")), makeField("ID", makeInt(2)))
 	orders := makeSlice(active, inactive)
-	root := makeStruct("Root", field_("Orders", orders))
+	root := makeStruct("Root", makeField("Orders", orders))
 
 	// ..Orders[Status=active] — finds Orders slice, then filters it
 	got := All(root, "..Orders[Status=active]")
@@ -392,10 +392,10 @@ func TestAllDescentFollowedByFilter(t *testing.T) {
 func TestAllDescentFollowedByWildcard(t *testing.T) {
 	items1 := makeSlice(makeInt(1), makeInt(2))
 	items2 := makeSlice(makeInt(3), makeInt(4))
-	inner := makeStruct("Inner", field_("Items", items2))
+	inner := makeStruct("Inner", makeField("Items", items2))
 	root := makeStruct("Root",
-		field_("Items", items1),
-		field_("Sub", inner),
+		makeField("Items", items1),
+		makeField("Sub", inner),
 	)
 
 	got := All(root, "..Items.*")
@@ -411,9 +411,9 @@ func TestAllDescentSequential(t *testing.T) {
 	// root.A.B = "x", root.A.Sub.B = "y"
 	bVal1 := makeString("x")
 	bVal2 := makeString("y")
-	subA := makeStruct("SubA", field_("B", bVal2))
-	aStruct := makeStruct("A", field_("B", bVal1), field_("Sub", subA))
-	root := makeStruct("Root", field_("A", aStruct))
+	subA := makeStruct("SubA", makeField("B", bVal2))
+	aStruct := makeStruct("A", makeField("B", bVal1), makeField("Sub", subA))
+	root := makeStruct("Root", makeField("A", aStruct))
 
 	got := All(root, "..A..B")
 	require.Len(t, got, 2)
@@ -424,8 +424,8 @@ func TestAllDescentSequential(t *testing.T) {
 // TestAllDescentOnSliceRoot verifies ..Name on a SliceValue root finds Name in
 // each element and their descendants.
 func TestAllDescentOnSliceRoot(t *testing.T) {
-	elem0 := makeStruct("Item", field_("Price", makeInt(5)))
-	elem1 := makeStruct("Item", field_("Price", makeInt(10)))
+	elem0 := makeStruct("Item", makeField("Price", makeInt(5)))
+	elem1 := makeStruct("Item", makeField("Price", makeInt(10)))
 	root := makeSlice(elem0, elem1)
 
 	got := All(root, "..Price")
@@ -437,10 +437,10 @@ func TestAllDescentOnSliceRoot(t *testing.T) {
 // TestAllDescentPreOrder verifies the depth-first pre-order: parent result
 // appears before child result.
 func TestAllDescentPreOrder(t *testing.T) {
-	inner := makeStruct("Inner", field_("X", makeInt(2)))
+	inner := makeStruct("Inner", makeField("X", makeInt(2)))
 	root := makeStruct("Root",
-		field_("X", makeInt(1)),
-		field_("Inner", inner),
+		makeField("X", makeInt(1)),
+		makeField("Inner", inner),
 	)
 
 	got := All(root, "..X")
@@ -455,13 +455,13 @@ func TestAllDescentPreOrder(t *testing.T) {
 // matching elements across heterogeneous struct types at different depths.
 func TestWildcardDescentHeterogeneousTypes(t *testing.T) {
 	// root contains Server, Laptop, NetworkDevice sub-structs all with Status field.
-	server := makeStruct("Server", field_("Status", makeString("active")), field_("Host", makeString("srv1")))
-	laptop := makeStruct("Laptop", field_("Status", makeString("inactive")), field_("User", makeString("alice")))
-	netdev := makeStruct("NetworkDevice", field_("Status", makeString("active")), field_("IP", makeString("10.0.0.1")))
+	server := makeStruct("Server", makeField("Status", makeString("active")), makeField("Host", makeString("srv1")))
+	laptop := makeStruct("Laptop", makeField("Status", makeString("inactive")), makeField("User", makeString("alice")))
+	netdev := makeStruct("NetworkDevice", makeField("Status", makeString("active")), makeField("IP", makeString("10.0.0.1")))
 	root := makeStruct("Root",
-		field_("Server", server),
-		field_("Laptop", laptop),
-		field_("NetworkDevice", netdev),
+		makeField("Server", server),
+		makeField("Laptop", laptop),
+		makeField("NetworkDevice", netdev),
 	)
 
 	got := All(root, "..[Status=active]")
@@ -473,13 +473,13 @@ func TestWildcardDescentHeterogeneousTypes(t *testing.T) {
 // TestWildcardDescentFieldAbsentOnSomeTypes verifies ..[Field=pattern] only
 // matches types that have the named field; types without it are silently skipped.
 func TestWildcardDescentFieldAbsentOnSomeTypes(t *testing.T) {
-	withStatus := makeStruct("A", field_("Status", makeString("active")), field_("ID", makeInt(1)))
-	withoutStatus := makeStruct("B", field_("Other", makeString("x")), field_("ID", makeInt(2)))
-	alsoWithStatus := makeStruct("C", field_("Status", makeString("active")), field_("ID", makeInt(3)))
+	withStatus := makeStruct("A", makeField("Status", makeString("active")), makeField("ID", makeInt(1)))
+	withoutStatus := makeStruct("B", makeField("Other", makeString("x")), makeField("ID", makeInt(2)))
+	alsoWithStatus := makeStruct("C", makeField("Status", makeString("active")), makeField("ID", makeInt(3)))
 	root := makeStruct("Root",
-		field_("A", withStatus),
-		field_("B", withoutStatus),
-		field_("C", alsoWithStatus),
+		makeField("A", withStatus),
+		makeField("B", withoutStatus),
+		makeField("C", alsoWithStatus),
 	)
 
 	got := All(root, "..[Status=active]")
@@ -492,8 +492,8 @@ func TestWildcardDescentFieldAbsentOnSomeTypes(t *testing.T) {
 // when nothing in the tree matches.
 func TestWildcardDescentNoMatchReturnsNil(t *testing.T) {
 	root := makeStruct("Root",
-		field_("A", makeStruct("A", field_("Status", makeString("inactive")))),
-		field_("B", makeStruct("B", field_("Status", makeString("pending")))),
+		makeField("A", makeStruct("A", makeField("Status", makeString("inactive")))),
+		makeField("B", makeStruct("B", makeField("Status", makeString("pending")))),
 	)
 
 	got := All(root, "..[Status=active]")
@@ -503,13 +503,13 @@ func TestWildcardDescentNoMatchReturnsNil(t *testing.T) {
 // TestWildcardDescentExistFilter verifies ..[Field!] collects all elements that
 // have the named field anywhere in the tree.
 func TestWildcardDescentExistFilter(t *testing.T) {
-	withName1 := makeStruct("X", field_("Name", makeString("alpha")), field_("Val", makeInt(1)))
-	noName := makeStruct("Y", field_("Val", makeInt(2)))
-	withName2 := makeStruct("Z", field_("Name", makeString("beta")), field_("Val", makeInt(3)))
+	withName1 := makeStruct("X", makeField("Name", makeString("alpha")), makeField("Val", makeInt(1)))
+	noName := makeStruct("Y", makeField("Val", makeInt(2)))
+	withName2 := makeStruct("Z", makeField("Name", makeString("beta")), makeField("Val", makeInt(3)))
 	root := makeStruct("Root",
-		field_("X", withName1),
-		field_("Y", noName),
-		field_("Z", withName2),
+		makeField("X", withName1),
+		makeField("Y", noName),
+		makeField("Z", withName2),
 	)
 
 	got := All(root, "..[Name!]")
@@ -522,22 +522,22 @@ func TestWildcardDescentExistFilter(t *testing.T) {
 // where the Tags slice contains a matching element, across all depths.
 func TestWildcardDescentContainsFilter(t *testing.T) {
 	res1 := makeStruct("Resource",
-		field_("Tags", makeSlice(makeString("devops"), makeString("cloud"))),
-		field_("ID", makeInt(1)),
+		makeField("Tags", makeSlice(makeString("devops"), makeString("cloud"))),
+		makeField("ID", makeInt(1)),
 	)
 	res2 := makeStruct("Resource",
-		field_("Tags", makeSlice(makeString("security"))),
-		field_("ID", makeInt(2)),
+		makeField("Tags", makeSlice(makeString("security"))),
+		makeField("ID", makeInt(2)),
 	)
 	res3 := makeStruct("Resource",
-		field_("Tags", makeSlice(makeString("devops"), makeString("ci"))),
-		field_("ID", makeInt(3)),
+		makeField("Tags", makeSlice(makeString("devops"), makeString("ci"))),
+		makeField("ID", makeInt(3)),
 	)
 	root := makeStruct("Root",
-		field_("R1", res1),
-		field_("Sub", makeStruct("Sub",
-			field_("R2", res2),
-			field_("R3", res3),
+		makeField("R1", res1),
+		makeField("Sub", makeStruct("Sub",
+			makeField("R2", res2),
+			makeField("R3", res3),
 		)),
 	)
 
@@ -551,24 +551,24 @@ func TestWildcardDescentContainsFilter(t *testing.T) {
 // both filters to every node in the tree.
 func TestWildcardDescentTwoChainedFilters(t *testing.T) {
 	match := makeStruct("Item",
-		field_("Status", makeString("active")),
-		field_("Tags", makeSlice(makeString("devops"))),
-		field_("ID", makeInt(1)),
+		makeField("Status", makeString("active")),
+		makeField("Tags", makeSlice(makeString("devops"))),
+		makeField("ID", makeInt(1)),
 	)
 	noStatus := makeStruct("Item",
-		field_("Status", makeString("inactive")),
-		field_("Tags", makeSlice(makeString("devops"))),
-		field_("ID", makeInt(2)),
+		makeField("Status", makeString("inactive")),
+		makeField("Tags", makeSlice(makeString("devops"))),
+		makeField("ID", makeInt(2)),
 	)
 	noTag := makeStruct("Item",
-		field_("Status", makeString("active")),
-		field_("Tags", makeSlice(makeString("security"))),
-		field_("ID", makeInt(3)),
+		makeField("Status", makeString("active")),
+		makeField("Tags", makeSlice(makeString("security"))),
+		makeField("ID", makeInt(3)),
 	)
 	root := makeStruct("Root",
-		field_("A", match),
-		field_("B", noStatus),
-		field_("C", noTag),
+		makeField("A", match),
+		makeField("B", noStatus),
+		makeField("C", noTag),
 	)
 
 	got := All(root, "..[Status=active][Tags~devops]")
@@ -579,9 +579,9 @@ func TestWildcardDescentTwoChainedFilters(t *testing.T) {
 // TestWildcardDescentInterfaceWrapped verifies ..[Field=pattern] matches
 // InterfaceValue-wrapped elements at any depth.
 func TestWildcardDescentInterfaceWrapped(t *testing.T) {
-	elem1 := wrapped("Item", makeStruct("Item", field_("Status", makeString("active")), field_("ID", makeInt(1))))
-	elem2 := wrapped("Item", makeStruct("Item", field_("Status", makeString("inactive")), field_("ID", makeInt(2))))
-	elem3 := wrapped("Item", makeStruct("Item", field_("Status", makeString("active")), field_("ID", makeInt(3))))
+	elem1 := wrapped("Item", makeStruct("Item", makeField("Status", makeString("active")), makeField("ID", makeInt(1))))
+	elem2 := wrapped("Item", makeStruct("Item", makeField("Status", makeString("inactive")), makeField("ID", makeInt(2))))
+	elem3 := wrapped("Item", makeStruct("Item", makeField("Status", makeString("active")), makeField("ID", makeInt(3))))
 	root := makeSlice(elem1, elem2, elem3)
 
 	got := All(root, "..[Status=active]")
@@ -593,10 +593,10 @@ func TestWildcardDescentInterfaceWrapped(t *testing.T) {
 // TestWildcardDescentFlatTree verifies ..[Status=active] on a flat (depth-1) tree
 // produces the same results as Items[Status=active] (filter on the slice directly).
 func TestWildcardDescentFlatTree(t *testing.T) {
-	active1 := makeStruct("Item", field_("Status", makeString("active")), field_("ID", makeInt(1)))
-	inactive := makeStruct("Item", field_("Status", makeString("inactive")), field_("ID", makeInt(2)))
-	active2 := makeStruct("Item", field_("Status", makeString("active")), field_("ID", makeInt(3)))
-	root := makeStruct("Root", field_("Items", makeSlice(active1, inactive, active2)))
+	active1 := makeStruct("Item", makeField("Status", makeString("active")), makeField("ID", makeInt(1)))
+	inactive := makeStruct("Item", makeField("Status", makeString("inactive")), makeField("ID", makeInt(2)))
+	active2 := makeStruct("Item", makeField("Status", makeString("active")), makeField("ID", makeInt(3)))
+	root := makeStruct("Root", makeField("Items", makeSlice(active1, inactive, active2)))
 
 	// Items[Status=active] filters the slice elements directly (no descent).
 	// Items..[Status=active] uses wildcard descent starting from Items (a slice):
@@ -619,13 +619,13 @@ func TestWildcardDescentDeepTree(t *testing.T) {
 	// depth 2: root.A.Sub has Status=inactive
 	// depth 3: root.A.Sub.Deep has Status=active
 	// depth 1: root.B has no Status
-	deep := makeStruct("Deep", field_("Status", makeString("active")), field_("Level", makeInt(3)))
-	sub := makeStruct("Sub", field_("Status", makeString("inactive")), field_("Level", makeInt(2)), field_("Deep", deep))
-	a := makeStruct("A", field_("Status", makeString("active")), field_("Level", makeInt(1)), field_("Sub", sub))
-	b := makeStruct("B", field_("Other", makeString("no status here")))
+	deep := makeStruct("Deep", makeField("Status", makeString("active")), makeField("Level", makeInt(3)))
+	sub := makeStruct("Sub", makeField("Status", makeString("inactive")), makeField("Level", makeInt(2)), makeField("Deep", deep))
+	a := makeStruct("A", makeField("Status", makeString("active")), makeField("Level", makeInt(1)), makeField("Sub", sub))
+	b := makeStruct("B", makeField("Other", makeString("no status here")))
 	root := makeStruct("Root",
-		field_("A", a),
-		field_("B", b),
+		makeField("A", a),
+		makeField("B", b),
 	)
 
 	got := All(root, "..[Status=active]")
@@ -682,7 +682,7 @@ func TestAllWalkStepIndexFails(t *testing.T) {
 func TestAllWalkNilInterfaceInner(t *testing.T) {
 	// An InterfaceValue wrapping nil; unwrapInterface returns nil.
 	nilWrapped := gobspect.InterfaceValue{TypeName: "T", Value: nil}
-	root := makeStruct("Root", field_("Child", nilWrapped))
+	root := makeStruct("Root", makeField("Child", nilWrapped))
 	got := All(root, "Child.Field")
 	assert.Nil(t, got)
 }
@@ -699,15 +699,9 @@ func TestAllWalkDefaultSegmentKind(t *testing.T) {
 // TestApplyFiltersToNodeEmptySegs verifies applyFiltersToNode falls back to
 // allWalk when segs is empty (first branch: len(segs)==0).
 func TestApplyFiltersToNodeEmptySegs(t *testing.T) {
-	// applyFiltersToNode is called from allWalk in the segDescend wildcard branch.
-	// When segs is empty (no filter in remainder) it falls back to allWalk.
-	// ".." (wildcard descent with no remainder) would trigger this but ".." is
-	// invalid syntax. Instead, test via "..[Status=active]" on an empty struct:
-	// the wildcard descent at root tries applyFiltersToNode(root, [filter]) which
-	// is covered elsewhere. We exercise the empty-segs branch directly by calling
-	// the unexported function.
+	// No expression reaches this branch — it needs ".." with an empty remainder,
+	// which the parser rejects — so call the unexported function directly.
 	result := applyFiltersToNode(makeString("x"), nil)
-	// With nil segs, allWalk(makeString("x"), nil) returns [makeString("x")].
 	assert.Equal(t, []gobspect.Value{makeString("x")}, result)
 }
 
@@ -716,7 +710,7 @@ func TestApplyFiltersToNodeEmptySegs(t *testing.T) {
 func TestApplyFiltersToNodeNonFilterFirstSeg(t *testing.T) {
 	// segs starts with a segField, not a segFilter.
 	segs := []segment{{kind: segField, name: "Name"}}
-	root := makeStruct("Item", field_("Name", makeString("hello")))
+	root := makeStruct("Item", makeField("Name", makeString("hello")))
 	result := applyFiltersToNode(root, segs)
 	assert.Equal(t, []gobspect.Value{makeString("hello")}, result)
 }
@@ -734,8 +728,8 @@ func TestDescendAllNilInterfaceInner(t *testing.T) {
 func TestDescendAll_NonEmptyArray(t *testing.T) {
 	// An array of structs each with a "Name" field.
 	arr := makeArray(
-		makeStruct("X", field_("Name", makeString("alice"))),
-		makeStruct("X", field_("Name", makeString("bob"))),
+		makeStruct("X", makeField("Name", makeString("alice"))),
+		makeStruct("X", makeField("Name", makeString("bob"))),
 	)
 	got := All(arr, "..Name")
 	require.Len(t, got, 2)
@@ -743,33 +737,22 @@ func TestDescendAll_NonEmptyArray(t *testing.T) {
 	assert.Equal(t, makeString("bob"), got[1])
 }
 
-// TestApplyFiltersToNodeNonFilterFallback verifies the applyFiltersToNode fallback:
-// when segs is empty or its first segment is not a segFilter, allWalk(v, segs) is
-// called directly. This is triggered by wildcard descent (..) when the remainder
-// after the descent has no leading filter.
+// TestApplyFiltersToNodeNonFilterFallback exercises the applyFiltersToNode
+// fallback through a real expression: "..[Status=active].Name" consumes the
+// leading filter, then hands the non-filter "Name" remainder to allWalk. The
+// two matches sit at different depths so the fallback is reached more than once.
 func TestApplyFiltersToNodeNonFilterFallback(t *testing.T) {
-	// "..[Status=active].Name" — wildcard descent with filter followed by a field.
-	// After applying the filter, allWalk is called with the "Name" remainder.
-	// The empty-segs branch is tested by "..[Status=active]" with no tail (already
-	// covered by TestWildcardDescentHeterogeneousTypes). The "non-filter first
-	// segment" branch in applyFiltersToNode fires when the wildcard descent has no
-	// leading filter in its remainder at all — e.g., ".." followed directly by a
-	// field name segment via the wildcard-descent code path.
-	//
-	// Construct a struct tree where root.A has Status=active and root.A.Sub also
-	// has Status=active. Use "..[Status=active].Name" to exercise both the filter
-	// path and the field tail through applyFiltersToNode.
 	match1 := makeStruct("Item",
-		field_("Status", makeString("active")),
-		field_("Name", makeString("one")),
+		makeField("Status", makeString("active")),
+		makeField("Name", makeString("one")),
 	)
 	match2 := makeStruct("Item",
-		field_("Status", makeString("active")),
-		field_("Name", makeString("two")),
+		makeField("Status", makeString("active")),
+		makeField("Name", makeString("two")),
 	)
 	root := makeStruct("Root",
-		field_("A", match1),
-		field_("B", makeStruct("B", field_("Sub", match2))),
+		makeField("A", match1),
+		makeField("B", makeStruct("B", makeField("Sub", match2))),
 	)
 
 	got := All(root, "..[Status=active].Name")
@@ -783,8 +766,8 @@ func TestApplyFiltersToNodeNonFilterFallback(t *testing.T) {
 func TestDescendAll_MapValues(t *testing.T) {
 	// A map whose values are structs that each have a "Price" field.
 	m := makeMap(
-		entry(makeString("a"), makeStruct("Item", field_("Price", makeInt(10)))),
-		entry(makeString("b"), makeStruct("Item", field_("Price", makeInt(20)))),
+		entry(makeString("a"), makeStruct("Item", makeField("Price", makeInt(10)))),
+		entry(makeString("b"), makeStruct("Item", makeField("Price", makeInt(20)))),
 		entry(makeString("c"), makeStruct("Item")), // no Price
 	)
 	got := All(m, "..Price")
@@ -801,14 +784,14 @@ func TestDescendAll_MapValues(t *testing.T) {
 func TestAllProjectionFanOut(t *testing.T) {
 	items := makeSlice(
 		makeStruct("Item",
-			field_("SKU", makeString("A")),
-			field_("Price", makeInt(10)),
-			field_("Stock", makeInt(50)),
+			makeField("SKU", makeString("A")),
+			makeField("Price", makeInt(10)),
+			makeField("Stock", makeInt(50)),
 		),
 		makeStruct("Item",
-			field_("SKU", makeString("B")),
-			field_("Price", makeInt(20)),
-			field_("Stock", makeInt(30)),
+			makeField("SKU", makeString("B")),
+			makeField("Price", makeInt(20)),
+			makeField("Stock", makeInt(30)),
 		),
 	)
 
@@ -832,9 +815,9 @@ func TestAllProjectionFanOut(t *testing.T) {
 // projected result matches the query order, not the source struct order.
 func TestAllProjectionPreservesOrder(t *testing.T) {
 	root := makeStruct("Item",
-		field_("A", makeInt(1)),
-		field_("B", makeInt(2)),
-		field_("C", makeInt(3)),
+		makeField("A", makeInt(1)),
+		makeField("B", makeInt(2)),
+		makeField("C", makeInt(3)),
 	)
 
 	// Query asks for C,A — reverse of the source order.
@@ -859,15 +842,15 @@ func TestAllProjectionOnScalar(t *testing.T) {
 func TestAllNestedProjectionFanOut(t *testing.T) {
 	items := makeSlice(
 		makeStruct("Item",
-			field_("Name", makeString("Alpha")),
-			field_("Address", makeStruct("Address",
-				field_("Zip", makeString("97201")),
+			makeField("Name", makeString("Alpha")),
+			makeField("Address", makeStruct("Address",
+				makeField("Zip", makeString("97201")),
 			)),
 		),
 		makeStruct("Item",
-			field_("Name", makeString("Beta")),
-			field_("Address", makeStruct("Address",
-				field_("Zip", makeString("10001")),
+			makeField("Name", makeString("Beta")),
+			makeField("Address", makeStruct("Address",
+				makeField("Zip", makeString("10001")),
 			)),
 		),
 	)
@@ -951,17 +934,17 @@ func TestAllPathSeq_MatchesAllPath(t *testing.T) {
 		},
 		{
 			name: "wildcard on slice",
-			root: makeStruct("Root", field_("Items", makeSlice(makeString("a"), makeString("b"), makeString("c")))),
+			root: makeStruct("Root", makeField("Items", makeSlice(makeString("a"), makeString("b"), makeString("c")))),
 			expr: "Items.*",
 		},
 		{
 			name: "wildcard on array",
-			root: makeStruct("Root", field_("Arr", makeArray(makeInt(10), makeInt(20), makeInt(30)))),
+			root: makeStruct("Root", makeField("Arr", makeArray(makeInt(10), makeInt(20), makeInt(30)))),
 			expr: "Arr.*",
 		},
 		{
 			name: "wildcard on map",
-			root: makeStruct("Root", field_("Meta", makeMap(
+			root: makeStruct("Root", makeField("Meta", makeMap(
 				entry(makeString("x"), makeInt(1)),
 				entry(makeString("y"), makeInt(2)),
 			))),
@@ -969,15 +952,15 @@ func TestAllPathSeq_MatchesAllPath(t *testing.T) {
 		},
 		{
 			name: "nested wildcard",
-			root: makeStruct("Root", field_("Orders", makeSlice(
-				makeStruct("Order", field_("Customer", makeStruct("Customer", field_("Name", makeString("Alice"))))),
-				makeStruct("Order", field_("Customer", makeStruct("Customer", field_("Name", makeString("Bob"))))),
+			root: makeStruct("Root", makeField("Orders", makeSlice(
+				makeStruct("Order", makeField("Customer", makeStruct("Customer", makeField("Name", makeString("Alice"))))),
+				makeStruct("Order", makeField("Customer", makeStruct("Customer", makeField("Name", makeString("Bob"))))),
 			))),
 			expr: "Orders.*.Customer.Name",
 		},
 		{
 			name: "multi wildcard matrix",
-			root: makeStruct("Root", field_("Matrix", makeSlice(
+			root: makeStruct("Root", makeField("Matrix", makeSlice(
 				makeSlice(makeInt(1), makeInt(2)),
 				makeSlice(makeInt(3), makeInt(4)),
 			))),
@@ -986,10 +969,10 @@ func TestAllPathSeq_MatchesAllPath(t *testing.T) {
 		{
 			name: "descent named",
 			root: makeStruct("Root",
-				field_("Price", makeInt(1)),
-				field_("A", makeStruct("B",
-					field_("Price", makeInt(2)),
-					field_("B", makeStruct("C", field_("Price", makeInt(3)))),
+				makeField("Price", makeInt(1)),
+				makeField("A", makeStruct("B",
+					makeField("Price", makeInt(2)),
+					makeField("B", makeStruct("C", makeField("Price", makeInt(3)))),
 				)),
 			),
 			expr: "..Price",
@@ -997,39 +980,39 @@ func TestAllPathSeq_MatchesAllPath(t *testing.T) {
 		{
 			name: "wildcard descent with filter",
 			root: makeStruct("Root",
-				field_("A", makeStruct("A", field_("Status", makeString("active")), field_("ID", makeInt(1)))),
-				field_("B", makeStruct("B", field_("Status", makeString("inactive")), field_("ID", makeInt(2)))),
-				field_("C", makeStruct("C", field_("Status", makeString("active")), field_("ID", makeInt(3)))),
+				makeField("A", makeStruct("A", makeField("Status", makeString("active")), makeField("ID", makeInt(1)))),
+				makeField("B", makeStruct("B", makeField("Status", makeString("inactive")), makeField("ID", makeInt(2)))),
+				makeField("C", makeStruct("C", makeField("Status", makeString("active")), makeField("ID", makeInt(3)))),
 			),
 			expr: "..[Status=active]",
 		},
 		{
 			name: "filter on slice",
-			root: makeStruct("Root", field_("Items", makeSlice(
-				makeStruct("Item", field_("Status", makeString("active")), field_("ID", makeInt(1))),
-				makeStruct("Item", field_("Status", makeString("inactive")), field_("ID", makeInt(2))),
+			root: makeStruct("Root", makeField("Items", makeSlice(
+				makeStruct("Item", makeField("Status", makeString("active")), makeField("ID", makeInt(1))),
+				makeStruct("Item", makeField("Status", makeString("inactive")), makeField("ID", makeInt(2))),
 			))),
 			expr: "Items[Status=active]",
 		},
 		{
 			name: "projection fan-out",
 			root: makeSlice(
-				makeStruct("Item", field_("SKU", makeString("A")), field_("Price", makeInt(10)), field_("Stock", makeInt(50))),
-				makeStruct("Item", field_("SKU", makeString("B")), field_("Price", makeInt(20)), field_("Stock", makeInt(30))),
+				makeStruct("Item", makeField("SKU", makeString("A")), makeField("Price", makeInt(10)), makeField("Stock", makeInt(50))),
+				makeStruct("Item", makeField("SKU", makeString("B")), makeField("Price", makeInt(20)), makeField("Stock", makeInt(30))),
 			),
 			expr: "*.SKU,Price",
 		},
 		{
 			name: "missing field returns empty",
-			root: makeStruct("Root", field_("Name", makeString("hi"))),
+			root: makeStruct("Root", makeField("Name", makeString("hi"))),
 			expr: "Missing.*",
 		},
 		{
 			name: "partial miss",
-			root: makeStruct("Root", field_("Items", makeSlice(
-				makeStruct("Item", field_("Name", makeString("Alice"))),
-				makeStruct("Item", field_("Price", makeInt(42))),
-				makeStruct("Item", field_("Name", makeString("Bob"))),
+			root: makeStruct("Root", makeField("Items", makeSlice(
+				makeStruct("Item", makeField("Name", makeString("Alice"))),
+				makeStruct("Item", makeField("Price", makeInt(42))),
+				makeStruct("Item", makeField("Name", makeString("Bob"))),
 			))),
 			expr: "Items.*.Name",
 		},
@@ -1057,7 +1040,7 @@ func TestAllPathSeq_MatchesAllPath(t *testing.T) {
 
 // TestAllSeq_MatchesAll verifies AllSeq produces the same results as All.
 func TestAllSeq_MatchesAll(t *testing.T) {
-	root := makeStruct("Root", field_("Items", makeSlice(
+	root := makeStruct("Root", makeField("Items", makeSlice(
 		makeString("a"), makeString("b"), makeString("c"),
 	)))
 
@@ -1084,9 +1067,9 @@ func TestAllPathSeq_EarlyBreak(t *testing.T) {
 	// Build a slice with 10 elements so there are many potential matches.
 	elems := make([]gobspect.Value, 10)
 	for i := range elems {
-		elems[i] = makeStruct(fmt.Sprintf("Item%d", i), field_("ID", makeInt(int64(i))))
+		elems[i] = makeStruct(fmt.Sprintf("Item%d", i), makeField("ID", makeInt(int64(i))))
 	}
-	root := makeStruct("Root", field_("Items", makeSlice(elems...)))
+	root := makeStruct("Root", makeField("Items", makeSlice(elems...)))
 
 	p, err := Parse("Items.*")
 	require.NoError(t, err)
@@ -1106,13 +1089,13 @@ func TestAllPathSeq_EarlyBreak(t *testing.T) {
 // — TestMustAll ———————————————————————————————————————————————————————————————
 
 func TestMustAll_ReturnsMatches(t *testing.T) {
-	root := makeStruct("Root", field_("Items", makeSlice(makeString("a"), makeString("b"))))
+	root := makeStruct("Root", makeField("Items", makeSlice(makeString("a"), makeString("b"))))
 	got := MustAll(root, "Items.*")
 	require.Equal(t, []gobspect.Value{makeString("a"), makeString("b")}, got)
 }
 
 func TestMustAll_PanicsOnNoMatch(t *testing.T) {
-	root := makeStruct("Root", field_("Items", makeSlice(makeString("a"))))
+	root := makeStruct("Root", makeField("Items", makeSlice(makeString("a"))))
 	assert.Panics(t, func() { MustAll(root, "Missing.*") })
 }
 
