@@ -5,6 +5,7 @@
 *.so
 *.dylib
 /gq
+/cmd/gq/gq
 
 # Ignore everything in dist/
 /dist/*

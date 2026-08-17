@@ -1,6 +1,7 @@
 package query
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/codepuke/gobspect"
@@ -1079,4 +1080,56 @@ func mustParse(expr string) Path {
 		panic(err)
 	}
 	return p
+}
+
+// TestFilterOnEmptyCollectionYieldsNothing verifies an element filter on an
+// empty slice/array/map yields no results rather than testing the container
+// itself as a predicate.
+func TestFilterOnEmptyCollectionYieldsNothing(t *testing.T) {
+	root := makeStruct("Root",
+		makeField("Empty", makeSlice()),
+		makeField("EmptyArr", makeArray()),
+		makeField("EmptyMap", makeMap()),
+		makeField("Full", makeSlice(makeStruct("Item", makeField("A", makeInt(1))))),
+	)
+
+	for _, expr := range []string{"Empty[Missing!!]", "EmptyArr[Missing!!]", "EmptyMap[Missing!!]", "Empty[X!]", "Empty[X=abc]"} {
+		t.Run(expr, func(t *testing.T) {
+			assert.Nil(t, All(root, expr))
+			_, ok := Get(root, expr)
+			assert.False(t, ok)
+		})
+	}
+
+	// A non-empty collection still filters its elements.
+	require.Len(t, All(root, "Full[Missing!!]"), 1)
+}
+
+// TestMustGetPanicMessageOperators verifies the blamed segment renders each
+// filter operator as written, not a '=' fallback.
+func TestMustGetPanicMessageOperators(t *testing.T) {
+	root := makeStruct("Root",
+		makeField("Items", makeSlice(makeStruct("Item",
+			makeField("Price", makeInt(50)),
+			makeField("Name", makeString("x")),
+		))),
+	)
+
+	tests := []struct{ expr, seg string }{
+		{"Items[Price!!]", "[Price!!]"},
+		{"Items[Price!=*]", "[Price!=*]"},
+		{"Items[Name!~go]", "[Name!~go]"},
+		{"Items[Price==99]", "[Price==99]"},
+		{"Items[Price<10]", "[Price<10]"},
+		{"Items[Price>100]", "[Price>100]"},
+		{"Items[Price<=10]", "[Price<=10]"},
+		{"Items[Price>=100]", "[Price>=100]"},
+		{`Items[Name="a=b"]`, `[Name="a=b"]`}, // quoting survives re-rendering
+	}
+	for _, tt := range tests {
+		t.Run(tt.expr, func(t *testing.T) {
+			want := fmt.Sprintf("query.MustGet: path %q did not resolve at segment %q", tt.expr, tt.seg)
+			assert.PanicsWithValue(t, want, func() { MustGet(root, tt.expr) })
+		})
+	}
 }

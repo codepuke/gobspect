@@ -504,3 +504,48 @@ func TestSchemaAt_WildcardDescentMapCandidate(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "map[string]string", got)
 }
+
+// TestSchemaAt_FilterAsPredicate verifies a filter on a non-collection type
+// mirrors the runtime's predicate fallback: the type is unchanged when the
+// filter could match, and an error is returned when it cannot.
+func TestSchemaAt_FilterAsPredicate(t *testing.T) {
+	schema := &gobspect.Schema{
+		Types: []gobspect.TypeDecl{
+			{
+				Name: "Order",
+				Kind: gobspect.KindStruct,
+				Fields: []gobspect.FieldDecl{
+					{Name: "ID", Type: "int"},
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name    string
+		root    string
+		expr    string
+		want    string
+		wantErr bool
+	}{
+		{name: "exist_on_struct", root: "Order", expr: "[ID!]", want: "Order"},
+		{name: "predicate_then_field", root: "Order", expr: "[ID!].ID", want: "int"},
+		{name: "numeric_on_struct", root: "Order", expr: "[ID==5]", want: "Order"},
+		{name: "not_exist_on_scalar", root: "int", expr: "[X!!]", want: "int"},
+		{name: "missing_field_errors", root: "Order", expr: "[Missing!]", wantErr: true},
+		{name: "exist_on_scalar_errors", root: "int", expr: "[X!]", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := query.Parse(tt.expr)
+			require.NoError(t, err)
+			got, err := query.SchemaAt(schema, tt.root, p)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

@@ -39,6 +39,8 @@ func TestRoundTripCorpus(t *testing.T) {
 		{"numeric gte", "[Count>=1]"},
 		{"bool eq true", "[Enabled==true]"},
 		{"bool eq false", "[Enabled==false]"},
+		{"signed numeric eq", "[Count==+5]"},
+		{"negative zero numeric", "[Count==-0]"},
 
 		// --- Filter after field ---
 		{"filter inline", "Orders[Status=active]"},

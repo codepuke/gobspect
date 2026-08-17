@@ -4,6 +4,41 @@ All notable changes to gobspect are tracked here. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.2.2
+
+### Fixed
+
+- **`query`: signed integer filter literals compare correctly against uint
+  fields.** `+`-prefixed literals (`[U==+5]`) and negative zero (`[U<=-0]`)
+  were treated as below the uint64 range, silently inverting comparisons;
+  `+`-prefixed literals above `MaxInt64` (`[M==+18446744073709551615]`) never
+  matched.
+- **`query`: element filters on empty collections yield nothing.** An empty
+  slice, array, or map was mistaken for a scalar and tested as a predicate, so
+  `Empty[Field!!]` wrongly yielded the empty container itself.
+- **`query`: `MustGet` panic messages render the failing filter operator as
+  written.** `!!`, `!=`, `!~`, `==`, `<`, `>`, `<=`, and `>=` all previously
+  displayed as `=`; quoted patterns are now re-quoted.
+- **`query`: `SchemaAt` accepts filter-as-predicate paths the runtime
+  resolves.** A filter on a non-collection type (e.g. `[ID!]` on a struct
+  root) now returns the type unchanged instead of a "not a collection" error.
+- **`gq`: float aggregation results landing exactly on 2^63 print correctly.**
+  The integer fast path in `-sum`/`-min`/`-max`/`-avg` output relied on an
+  out-of-range float→int64 conversion, printing `9223372036854775807` (off by
+  one, and platform-dependent) instead of `9.223372036854776e+18`.
+- **`gq`: `-index` values below -1 are rejected** with a usage error instead
+  of silently behaving like "all values".
+- **`gq`: an accidentally committed 3.6 MB `cmd/gq/gq` binary was removed**
+  from the repository and is now gitignored.
+
+### Documentation
+
+- `gq` README: the `[Field~pattern]` filter was documented as a substring
+  match; it is a collection-contains match (slice/array/map with an entry
+  matching the glob). The filter table now also covers `!!`, `!=`, `!~`, and
+  the ordering comparisons, and the aggregation section notes that gob's
+  omitted zero-valued fields are skipped by `-avg`/`-min`/`-max`.
+
 ## v0.2.1
 
 ### Security / robustness

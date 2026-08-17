@@ -128,17 +128,7 @@ func segString(s segment) string {
 	case segWildcard:
 		return "*"
 	case segFilter:
-		if len(s.orAlts) > 0 {
-			return Path{segs: []segment{s}}.String()
-		}
-		switch s.filterOp {
-		case filterOpExist:
-			return "[" + s.name + "!]"
-		case filterOpContains:
-			return "[" + s.name + "~" + s.filterPattern + "]"
-		default:
-			return "[" + s.name + "=" + s.filterPattern + "]"
-		}
+		return Path{segs: []segment{s}}.String()
 	case segDescend:
 		return ".." + s.name
 	case segProject:
@@ -248,31 +238,24 @@ func collectAll(v gobspect.Value) []gobspect.Value {
 }
 
 // collectFiltered applies filter seg to v and returns the matching values.
-//
-// If v is a collection (SliceValue, ArrayValue, MapValue), it iterates over the
-// elements and returns those that pass the filter.
-//
-// If v is not a collection, the filter is applied to v itself as a predicate:
-//   - If v passes the filter, returns ([v], true).
-//   - If v does not pass the filter, returns (nil, true).
-//
-// The second return value is always true; the (nil, true) form lets callers
-// distinguish "filter applied but nothing passed" from a future error path.
+// For a collection (SliceValue, ArrayValue, MapValue) it returns the elements
+// that pass the filter; an empty collection yields nothing. For any other node
+// the filter is applied to v itself as a predicate, returning ([v], true) or
+// (nil, true). The second return value is always true (reserved error path).
 func collectFiltered(v gobspect.Value, seg segment) ([]gobspect.Value, bool) {
-	elems := collectAll(v)
-	if elems == nil {
-		// Not a collection — treat filter as a predicate applied directly to v.
-		if matchesFilter(unwrapInterface(v), seg) {
-			return []gobspect.Value{v}, true
+	switch v.(type) {
+	case gobspect.SliceValue, gobspect.ArrayValue, gobspect.MapValue:
+		var out []gobspect.Value
+		for _, elem := range collectAll(v) {
+			if matchesFilter(unwrapInterface(elem), seg) {
+				out = append(out, elem)
+			}
 		}
-		return nil, true
+		return out, true
 	}
-
-	var out []gobspect.Value
-	for _, elem := range elems {
-		if matchesFilter(unwrapInterface(elem), seg) {
-			out = append(out, elem)
-		}
+	// Not a collection — apply the filter to v itself as a predicate.
+	if matchesFilter(unwrapInterface(v), seg) {
+		return []gobspect.Value{v}, true
 	}
-	return out, true
+	return nil, true
 }

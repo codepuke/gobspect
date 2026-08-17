@@ -251,6 +251,11 @@ func advanceSegment(schema *gobspect.Schema, currentExpr string, seg segment) (s
 	case segIndex, segFilter, segWildcard:
 		elem, err := extractElemType(schema, currentExpr)
 		if err != nil {
+			if seg.kind == segFilter && typeCouldMatchFilter(schema, currentExpr, seg) {
+				// Runtime applies a filter on a non-collection as a predicate;
+				// the type is unchanged.
+				return currentExpr, nil
+			}
 			return "", fmt.Errorf("schema lookup on collection: %v", err)
 		}
 		return elem, nil

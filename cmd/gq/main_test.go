@@ -489,6 +489,38 @@ func TestRun_SumDegradesToFloat(t *testing.T) {
 	assert.Equal(t, "3.5\n", stdout.String())
 }
 
+// TestFormatFloat_Int64Boundary pins the int64 fast path's bounds: exactly
+// 2^63 must print in float form, not as a saturated int64.
+func TestFormatFloat_Int64Boundary(t *testing.T) {
+	assert.Equal(t, "9.223372036854776e+18", formatFloat(9223372036854775808.0))
+	assert.Equal(t, "-9223372036854775808", formatFloat(-9223372036854775808.0))
+	assert.Equal(t, "10", formatFloat(10.0))
+	assert.Equal(t, "3.5", formatFloat(3.5))
+	assert.Equal(t, "1e+19", formatFloat(1e19))
+}
+
+// TestRun_SumFloatAtInt64Boundary verifies a float sum landing exactly on 2^63
+// prints in float form end-to-end.
+func TestRun_SumFloatAtInt64Boundary(t *testing.T) {
+	type rec struct{ V float64 }
+	r := gobEncodeValues(t, rec{V: 1 << 62}, rec{V: 1 << 62})
+
+	var stdout, stderr bytes.Buffer
+	exitCode := run([]string{"-sum", "V"}, r, &stdout, &stderr)
+
+	require.Equal(t, 0, exitCode, "stderr: %s", stderr.String())
+	assert.Equal(t, "9.223372036854776e+18\n", stdout.String())
+}
+
+// TestRun_IndexValidation verifies -index rejects values below -1.
+func TestRun_IndexValidation(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	exitCode := run([]string{"-index", "-2"}, strings.NewReader(""), &stdout, &stderr)
+
+	assert.Equal(t, 2, exitCode)
+	assert.Contains(t, stderr.String(), "-index must be non-negative")
+}
+
 // TestRun_NonFiniteJSON verifies NaN floats serialize as strings by default
 // and as null under -nonfinite null, instead of failing the document.
 func TestRun_NonFiniteJSON(t *testing.T) {

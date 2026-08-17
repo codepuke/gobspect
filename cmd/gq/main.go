@@ -153,6 +153,10 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		fmt.Fprintln(stderr, "gq: -max-bytes must be non-negative")
 		return 2
 	}
+	if *indexFlag < -1 {
+		fmt.Fprintln(stderr, "gq: -index must be non-negative (or -1 for all)")
+		return 2
+	}
 	if *nonfiniteFlag != "strings" && *nonfiniteFlag != "null" {
 		fmt.Fprintf(stderr, "gq: unknown -nonfinite value %q; use strings or null\n", *nonfiniteFlag)
 		return 2
@@ -815,10 +819,12 @@ func toNumeric(v gobspect.Value) (i int64, f float64, isInt, ok bool) {
 
 // formatFloat renders a numeric accumulator compactly. Integer-valued floats
 // drop the trailing ".0" so e.g. a count-like sum of 10 reads as "10" instead
-// of "10.000000".
+// of "10.000000". The bounds check keeps the int64 conversion in range: out of
+// range it is implementation-defined (arm64 saturates, making exactly 2^63
+// print as MaxInt64).
 func formatFloat(f float64) string {
-	if f == float64(int64(f)) {
-		return fmt.Sprintf("%d", int64(f))
+	if f >= math.MinInt64 && f < math.MaxInt64 && f == float64(int64(f)) {
+		return strconv.FormatInt(int64(f), 10)
 	}
 	return strconv.FormatFloat(f, 'g', -1, 64)
 }

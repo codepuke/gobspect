@@ -1223,3 +1223,63 @@ func TestFilterBoolEqEdgeCases(t *testing.T) {
 		})
 	}
 }
+
+// TestFilterSignedIntegerLiterals verifies '+'-prefixed and negative-zero
+// integer literals compare numerically against uint and int fields.
+func TestFilterSignedIntegerLiterals(t *testing.T) {
+	root := makeStruct("Root",
+		makeField("U", makeUint(5)),
+		makeField("Z", makeUint(0)),
+		makeField("M", makeUint(18446744073709551615)),
+		makeField("I", makeInt(5)),
+		makeField("IZ", makeInt(0)),
+	)
+
+	tests := []struct {
+		expr  string
+		match bool
+	}{
+		// '+'-prefixed target vs uint field.
+		{"[U==+5]", true},
+		{"[U<+5]", false},
+		{"[U>+5]", false},
+		{"[U<=+5]", true},
+		{"[U>=+5]", true},
+		{"[Z>+5]", false},
+		{"[Z<+5]", true},
+		// Negative zero vs uint field.
+		{"[Z==-0]", true},
+		{"[Z<-0]", false},
+		{"[Z>=-0]", true},
+		{"[U==-0]", false},
+		{"[U>-0]", true},
+		{"[U<=-0]", false},
+		// '+'-prefixed target above MaxInt64 but within uint64 range.
+		{"[M==+18446744073709551615]", true},
+		{"[M<+18446744073709551615]", false},
+		{"[M>=+18446744073709551615]", true},
+		{"[U<+18446744073709551615]", true},
+		// Genuinely negative targets still resolve below the uint range.
+		{"[U>-3]", true},
+		{"[U<-3]", false},
+		{"[U==-3]", false},
+		// Targets beyond uint64 still resolve above any value.
+		{"[U<+99999999999999999999]", true},
+		{"[U>+99999999999999999999]", false},
+		// '+'-prefixed target vs int fields.
+		{"[I==+5]", true},
+		{"[I>+5]", false},
+		{"[I<=+5]", true},
+		{"[IZ==-0]", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.expr, func(t *testing.T) {
+			got := All(root, tt.expr)
+			if tt.match {
+				require.Len(t, got, 1)
+			} else {
+				assert.Empty(t, got)
+			}
+		})
+	}
+}

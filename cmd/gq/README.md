@@ -111,10 +111,10 @@ Expressions are dot-separated path segments. The full syntax is defined by the [
 | `.-1` | Last element |
 | `.*` | All elements of a slice, array, or map |
 | `..Field` | Recursive descent: find `Field` at any depth |
-| `[Field!]` | Filter: keep elements where `Field` exists |
-| `[Field=pattern]` | Filter: glob match (`*` and `?` wildcards) |
-| `[Field~text]` | Filter: substring match |
-| `[Field==3.14]` | Filter: numeric equality |
+| `[Field!]` | Filter: keep elements where `Field` exists (`[Field!!]`: where it is absent) |
+| `[Field=pattern]` | Filter: glob match (`*` and `?` wildcards); `[Field!=pattern]` negates |
+| `[Field~pattern]` | Filter: `Field` is a slice/array/map containing a string matching the glob; `[Field!~pattern]` negates |
+| `[Field==3.14]` | Filter: numeric/bool comparison (`==`, `<`, `>`, `<=`, `>=`) |
 | `[F1=a]\|[F2=b]` | Filter: OR of multiple conditions |
 | `A,B,C` | Field projection: returns a struct subset with only the named fields |
 
@@ -267,6 +267,8 @@ gq -avg Score -f runs.gob '.Results.*[Status=ok]'
 ```
 
 These are single-pass over the stream and never materialise the full match set in memory.
+
+Gob omits zero-valued fields on the wire, so a match whose aggregation path is absent (an encoded zero) is skipped: `-avg` divides by the count of present values only, and `-min`/`-max` never see the omitted zeros.
 
 ### Statistics (`-stats`)
 

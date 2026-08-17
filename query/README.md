@@ -162,7 +162,7 @@ Keeps elements where `Field` is a number or bool matching `value`. The `==`, `<`
 
 Bool literals are case-insensitive: `true`, `True`, `TRUE` all match `BoolValue{true}`. Any other word (e.g. `banana`) is a **parse-time error** — `Parse` returns a `*ParseError` and `All`/`Get`/`MustGet` panic.
 
-Integer comparisons are exact across the full `int64`/`uint64` range — including values near `MaxInt64`/`MaxUint64` and integer literals that overflow both ranges. Only `FloatValue` fields and float-syntax literals (containing `.` or an exponent) use floating-point comparison.
+Integer comparisons are exact across the full `int64`/`uint64` range — including values near `MaxInt64`/`MaxUint64` and integer literals that overflow both ranges. Signed literals (`+5`, `-0`) compare numerically. Only `FloatValue` fields and float-syntax literals (containing `.` or an exponent) use floating-point comparison.
 
 ```go
 query.All(root, "Items[Count==5]")
@@ -350,3 +350,5 @@ t, err := query.SchemaAt(schema, "Order", p)
 When a path contains a recursive-descent segment (`..`), `SchemaAt` widens its search to every type reachable from the current candidates and reports the **union** of distinct result types as a pipe-joined string (`"int|string"`) in sorted order. For `map[string]T` fields, the value type `T` is also a candidate because any runtime string key could match the descent name.
 
 Filters directly following a wildcard descend (`..[Status=active]`) are treated as per-node predicates, matching the runtime: the result is the union of reachable types that could satisfy the filter — named struct types declaring the field, plus string-keyed map types. `[Field!!]` keeps every reachable type, since any node lacking the field passes.
+
+A filter on a non-collection type (e.g. `[ID!]` on a struct root) is likewise a type-preserving predicate: the type expression is unchanged when the filter could match, and an error is returned when it cannot.

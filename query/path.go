@@ -481,8 +481,14 @@ func parseFilter(expr string, start int) (segment, int, error) {
 						seg.filterIntVal = iv
 						seg.filterIntOK = true
 					}
-					if uv, err := strconv.ParseUint(pattern, 10, 64); err == nil {
+					// ParseUint rejects sign prefixes; strip '+' and derive -0
+					// from the int parse so filterUintOK holds iff the target
+					// fits in uint64.
+					if uv, err := strconv.ParseUint(strings.TrimPrefix(pattern, "+"), 10, 64); err == nil {
 						seg.filterUintVal = uv
+						seg.filterUintOK = true
+					} else if seg.filterIntOK && seg.filterIntVal >= 0 {
+						seg.filterUintVal = uint64(seg.filterIntVal)
 						seg.filterUintOK = true
 					}
 				}
