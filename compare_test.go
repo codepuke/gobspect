@@ -128,10 +128,31 @@ func TestEqual(t *testing.T) {
 			true,
 		},
 		{
-			"interface outer name ignored",
+			// The concrete type recorded in an interface is part of the value:
+			// Miles(7) and Kilos(7) both decode to IntValue{7} and differ only
+			// here. Use Comparer{IgnoreInterfaceTypeName: true} to disregard it.
+			"interface outer name honored",
 			gobspect.InterfaceValue{TypeName: "A", Value: gobspect.IntValue{V: 7}},
 			gobspect.InterfaceValue{TypeName: "B", Value: gobspect.IntValue{V: 7}},
+			false,
+		},
+		{
+			"interface same name",
+			gobspect.InterfaceValue{TypeName: "A", Value: gobspect.IntValue{V: 7}},
+			gobspect.InterfaceValue{TypeName: "A", Value: gobspect.IntValue{V: 7}},
 			true,
+		},
+		{
+			"nested interface layers",
+			gobspect.InterfaceValue{TypeName: "A", Value: gobspect.InterfaceValue{TypeName: "B", Value: gobspect.IntValue{V: 7}}},
+			gobspect.InterfaceValue{TypeName: "A", Value: gobspect.InterfaceValue{TypeName: "B", Value: gobspect.IntValue{V: 7}}},
+			true,
+		},
+		{
+			"nested interface inner name differs",
+			gobspect.InterfaceValue{TypeName: "A", Value: gobspect.InterfaceValue{TypeName: "B", Value: gobspect.IntValue{V: 7}}},
+			gobspect.InterfaceValue{TypeName: "A", Value: gobspect.InterfaceValue{TypeName: "C", Value: gobspect.IntValue{V: 7}}},
+			false,
 		},
 	}
 

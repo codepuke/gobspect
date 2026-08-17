@@ -141,6 +141,15 @@ type formatConfig struct {
 	color               ColorScheme
 	inlineWidth         int
 	mapOrder            MapOrder
+	hideIfaceTypeName   bool
+}
+
+// withoutIfaceTypeName suppresses the "(TypeName) " prefix on interface
+// values. Internal only: [Comparer] uses it so that ignoring
+// InterfaceValue.TypeName also covers interfaces reached through the
+// composite comparison path, which compares rendered output.
+func withoutIfaceTypeName() FormatOption {
+	return func(c *formatConfig) { c.hideIfaceTypeName = true }
 }
 
 // WithIndent sets the indentation string used for nested output. Default: "  ".
@@ -501,7 +510,7 @@ func fmtInterfaceTo(w io.Writer, v InterfaceValue, cfg *formatConfig, depth int)
 	if _, ok := v.Value.(NilValue); ok {
 		return writeStr(w, cfg.color.Nil.Apply("nil"))
 	}
-	if v.TypeName != "" {
+	if v.TypeName != "" && !cfg.hideIfaceTypeName {
 		if err := writeStr(w, cfg.color.OpaquePrefix.Apply("("+v.TypeName+")")+" "); err != nil {
 			return err
 		}

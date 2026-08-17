@@ -1,8 +1,8 @@
-// Fuzzing baseline: 2026-04-17. Ran for 300s with no failures and 654 corpus entries.
+// Fuzzing baseline: 2026-08-17. Ran 3h, no failures, 629 corpus entries.
 package query
 
 import (
-	"math/rand"
+	"math/rand/v2"
 	"reflect"
 	"testing"
 
@@ -49,9 +49,25 @@ func FuzzORGroups(f *testing.F) {
 			t.Fatalf("round-trip String drift: s1=%q s2=%q", s1, s2)
 		}
 
-		// Invariants 2, 3, 4: exercise matching.
-		exerciseMatching(t, p)
+		// Invariants 2, 3, 4: exercise matching. The shuffle is seeded from the
+		// expression so a commutativity failure reproduces from its saved
+		// corpus entry rather than depending on the global rand state.
+		exerciseMatching(t, p, rand.New(rand.NewPCG(seedFor(expr), 0x9E3779B97F4A7C15)))
 	})
+}
+
+// seedFor derives a deterministic PCG seed from an expression (FNV-1a).
+func seedFor(expr string) uint64 {
+	const (
+		offset64 = 14695981039346656037
+		prime64  = 1099511628211
+	)
+	h := uint64(offset64)
+	for i := range len(expr) {
+		h ^= uint64(expr[i])
+		h *= prime64
+	}
+	return h
 }
 
 func assertORGroupInvariant(t *testing.T, p Path) {
@@ -68,7 +84,7 @@ func assertORGroupInvariant(t *testing.T, p Path) {
 	}
 }
 
-func exerciseMatching(t *testing.T, p Path) {
+func exerciseMatching(t *testing.T, p Path, rng *rand.Rand) {
 	// Fixed test fixture covering various types.
 	fixture := makeStruct("Fixture",
 		makeField("a", makeInt(1)),
@@ -114,7 +130,7 @@ func exerciseMatching(t *testing.T, p Path) {
 			// Invariant 3: Commutativity.
 			alts := make([]segment, len(seg.orAlts))
 			copy(alts, seg.orAlts)
-			rand.Shuffle(len(alts), func(i, j int) { alts[i], alts[j] = alts[j], alts[i] })
+			rng.Shuffle(len(alts), func(i, j int) { alts[i], alts[j] = alts[j], alts[i] })
 
 			shuffledSeg := seg
 			shuffledSeg.orAlts = alts

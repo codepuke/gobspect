@@ -4,6 +4,71 @@ All notable changes to gobspect are tracked here. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.2.3
+
+### Fixed
+
+- **`Equal` and `CompareValues` are reflexive for nested interface values.**
+  Both peeled a single `InterfaceValue` layer before dispatching, so a value
+  wrapped more than once — `InterfaceValue{Value: InterfaceValue{…}}`, which
+  gob streams do produce — reached no case in the comparison switch and fell
+  through to "not equal", even when compared against itself. `diff` inherited
+  the fault and reported phantom differences between identical values. The
+  same hole existed for an `InterfaceValue` holding a nil inner value; it now
+  normalises to `NilValue`.
+- **`CompareValues` no longer contradicts itself by nesting depth.** Interface
+  type names were ignored at the top level but honored one level down, because
+  composite values fall back to comparing `Format` output and `Format` renders
+  the `(TypeName)` prefix. The same pair of values could compare equal or
+  unequal depending only on how deeply they sat.
+
+### Changed
+
+- **An interface's concrete type name now participates in comparison.**
+  `Equal` previously documented that an `InterfaceValue`'s `TypeName` was
+  disregarded. For struct concretes that was harmless — the inner
+  `StructValue.TypeName` already told `Dog` from `Cat` — but for named scalar
+  types it is the only surviving distinction: `Miles(5)` and `Kilos(5)` both
+  decode to `InterfaceValue{Value: IntValue{5}}`, and they compared equal.
+  Values that differ only by the concrete type stored in an interface are now
+  reported as different.
+
+  A one-sided wrapper is still unwrapped, so a value read through an interface
+  continues to equal the same value read directly.
+
+### Added
+
+- **`Comparer`**, a configurable comparison front end. `Comparer.Equal` and
+  `Comparer.Compare` take the same arguments as the package-level functions,
+  which are now shorthands for the zero value (and `Comparer{Fold: true}`).
+  - `IgnoreInterfaceTypeName` restores the previous behavior, uniformly at
+    every nesting depth. Set it when diffing streams from different builds of
+    the same program: `TypeName` holds the fully-qualified type, so a module
+    path change or package move otherwise makes every interface-typed field
+    read as modified.
+  - `Fold` selects case-insensitive string comparison, and composes with
+    `IgnoreInterfaceTypeName` rather than excluding it.
+
+### Test / infrastructure
+
+- **Six new fuzz targets** covering previously unfuzzed surface: value
+  rendering and JSON serialization (`FuzzRender`), comparison and diffing
+  (`FuzzCompareDiff`), path evaluation over decoded streams (`FuzzQueryEval`),
+  CSV/TSV output (`FuzzTabular`), sort-spec parsing and sorting
+  (`FuzzSortval`), and the `gq` CLI end to end including gzip sniffing
+  (`FuzzGQ`). Targets assert real properties — rendering determinism, JSON
+  validity, ordering antisymmetry, permutation-preserving sorts, and
+  rectangular CSV output — rather than only checking for panics.
+- **`FuzzDecode` extended** to drive `Stream.Messages`, `Stream.Stats`, and
+  the type-table accessors, and to repeat every pass with
+  `WithSkipCorruptValues` enabled so the resync path is exercised.
+- **`FuzzORGroups` made reproducible**: its alternative-shuffling step drew
+  from the global `math/rand` source, so a commutativity failure need not
+  reproduce from its saved corpus entry. It is now seeded from the input
+  expression.
+- A three-hour, nine-target fuzzing campaign found both defects above.
+  Baselines are recorded at the top of each target's file.
+
 ## v0.2.2
 
 ### Fixed

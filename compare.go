@@ -8,27 +8,61 @@ import (
 	"strings"
 )
 
+// Comparer compares Values with configurable semantics. The zero Comparer
+// matches the package-level [Equal] and [CompareValues] functions.
+type Comparer struct {
+	// IgnoreInterfaceTypeName drops [InterfaceValue.TypeName] from the
+	// comparison, so that only the concrete value inside the interface
+	// matters.
+	//
+	// By default the name participates: a gob stream records the concrete
+	// type stored in an interface, and for a named scalar that name is the
+	// only place the distinction survives. Miles(5) and Kilos(5) both decode
+	// to InterfaceValue{Value: IntValue{5}} and differ solely by TypeName, so
+	// ignoring it silently conflates them.
+	//
+	// Set this when comparing streams produced by different builds of the
+	// same program. TypeName holds the fully-qualified type
+	// ("example.com/m/pkg.Dog"), so a module path change or a package move
+	// otherwise makes every interface-typed field read as modified even
+	// though the data is unchanged.
+	IgnoreInterfaceTypeName bool
+
+	// Fold compares strings case-insensitively using strings.ToLower. It does
+	// not handle all Unicode case equivalences (e.g. ß vs SS), and does not
+	// reach strings nested inside composite values, which compare by [Format]
+	// output.
+	Fold bool
+}
+
 // Equal reports whether a and b are structurally equal Values. Equality is
 // strict: the two kinds must match, composite shapes must line up exactly, and
 // primitives compare by native value. Cross-kind numeric equivalence
 // (e.g. IntValue{5} vs FloatValue{5}) returns false — use [CompareValues] if
 // you need the permissive numeric coercion.
 //
-// InterfaceValue wrappers are unwrapped on both sides before comparison. An
-// InterfaceValue's outer TypeName does not participate in equality: only the
-// inner concrete value matters.
+// An [InterfaceValue]'s TypeName participates in equality unless
+// [Comparer.IgnoreInterfaceTypeName] is set. Interfaces nest, and every layer
+// is compared. When only one side is interface-wrapped the wrappers are
+// unwrapped and the concrete values compared, so a value read through an
+// interface still equals the same value read directly.
 //
 // Floats compare structurally, not by IEEE semantics: NaN equals NaN (and a
 // complex value with NaN parts equals its bitwise twin). Anything else would
 // make a value unequal to itself and report phantom differences when a stream
 // is diffed against an identical copy.
-func Equal(a, b Value) bool {
-	if iv, ok := a.(InterfaceValue); ok {
-		a = iv.Value
+func Equal(a, b Value) bool { return Comparer{}.Equal(a, b) }
+
+// Equal reports whether a and b are structurally equal under c's settings.
+// See the package-level [Equal] for the comparison rules.
+func (c Comparer) Equal(a, b Value) bool {
+	if !c.IgnoreInterfaceTypeName {
+		var same bool
+		if a, b, same = peelIfaces(a, b); !same {
+			return false
+		}
 	}
-	if iv, ok := b.(InterfaceValue); ok {
-		b = iv.Value
-	}
+	a, b = unwrapIface(a), unwrapIface(b)
 	switch av := a.(type) {
 	case NilValue:
 		_, ok := b.(NilValue)
@@ -74,7 +108,7 @@ func Equal(a, b Value) bool {
 			if av.Fields[i].Name != bv.Fields[i].Name {
 				return false
 			}
-			if !Equal(av.Fields[i].Value, bv.Fields[i].Value) {
+			if !c.Equal(av.Fields[i].Value, bv.Fields[i].Value) {
 				return false
 			}
 		}
@@ -93,7 +127,7 @@ func Equal(a, b Value) bool {
 				if used[i] {
 					continue
 				}
-				if Equal(ae.Key, be.Key) && Equal(ae.Value, be.Value) {
+				if c.Equal(ae.Key, be.Key) && c.Equal(ae.Value, be.Value) {
 					used[i] = true
 					matched = true
 					break
@@ -110,7 +144,7 @@ func Equal(a, b Value) bool {
 			return false
 		}
 		for i := range av.Elems {
-			if !Equal(av.Elems[i], bv.Elems[i]) {
+			if !c.Equal(av.Elems[i], bv.Elems[i]) {
 				return false
 			}
 		}
@@ -121,7 +155,7 @@ func Equal(a, b Value) bool {
 			return false
 		}
 		for i := range av.Elems {
-			if !Equal(av.Elems[i], bv.Elems[i]) {
+			if !c.Equal(av.Elems[i], bv.Elems[i]) {
 				return false
 			}
 		}
@@ -135,7 +169,6 @@ func Equal(a, b Value) bool {
 //	NilValue < BoolValue < IntValue/UintValue/FloatValue < ComplexValue < StringValue < BytesValue < OpaqueValue < everything else
 
 // CompareValues returns -1, 0, or +1 ordering a before, equal to, or after b.
-// InterfaceValue is unwrapped from both sides before dispatch.
 // Same-kind numerics: Int vs Int uses int64, Uint vs Uint uses uint64.
 // Cross-numeric comparisons use float64; large integer values near the limits
 // of float64 precision may not compare correctly.
@@ -143,12 +176,34 @@ func Equal(a, b Value) bool {
 // equals itself, keeping the ordering total. Complex values order by real
 // part, then imaginary part.
 // Composite types (struct, map, slice, array) fall back to [Format] output.
-func CompareValues(a, b Value) int {
-	if iv, ok := a.(InterfaceValue); ok {
-		a = iv.Value
+//
+// [InterfaceValue] layers order by TypeName before their concrete values,
+// unless [Comparer.IgnoreInterfaceTypeName] is set. See [Equal] for how the
+// name participates and why.
+func CompareValues(a, b Value) int { return Comparer{}.Compare(a, b) }
+
+// CompareValuesFold is [CompareValues] with case-insensitive string
+// comparison. It is shorthand for Comparer{Fold: true}.Compare.
+func CompareValuesFold(a, b Value) int { return Comparer{Fold: true}.Compare(a, b) }
+
+// Compare orders a and b under c's settings, returning -1, 0, or +1.
+// See the package-level [CompareValues] for the ordering rules.
+func (c Comparer) Compare(a, b Value) int {
+	if !c.IgnoreInterfaceTypeName {
+		var same bool
+		var ord int
+		if a, b, same, ord = orderIfaces(a, b); !same {
+			return ord
+		}
 	}
-	if iv, ok := b.(InterfaceValue); ok {
-		b = iv.Value
+	a, b = unwrapIface(a), unwrapIface(b)
+
+	if c.Fold {
+		if av, ok := a.(StringValue); ok {
+			if bv, ok := b.(StringValue); ok {
+				return cmpInt(strings.Compare(strings.ToLower(av.V), strings.ToLower(bv.V)), 0)
+			}
+		}
 	}
 
 	oa, ob := kindOrder(a), kindOrder(b)
@@ -215,27 +270,80 @@ func CompareValues(a, b Value) int {
 		return cmpInt(strings.Compare(as, bs), 0)
 	}
 
-	// Composite types: compare by Format output as last resort.
-	return cmpInt(strings.Compare(Format(a), Format(b)), 0)
+	// Composite types: compare by Format output as last resort. Interface
+	// layers nested inside a composite are rendered by Format, so the name
+	// has to be suppressed there too when it is being ignored — otherwise
+	// the setting would apply at the top level but not one level down.
+	var opts []FormatOption
+	if c.IgnoreInterfaceTypeName {
+		opts = append(opts, withoutIfaceTypeName())
+	}
+	return cmpInt(strings.Compare(Format(a, opts...), Format(b, opts...)), 0)
 }
 
-// CompareValuesFold is identical to [CompareValues] except strings are compared
-// case-insensitively using strings.ToLower. It does not handle all Unicode case
-// equivalences (e.g. ß vs SS).
-func CompareValuesFold(a, b Value) int {
-	if iv, ok := a.(InterfaceValue); ok {
-		a = iv.Value
-	}
-	if iv, ok := b.(InterfaceValue); ok {
-		b = iv.Value
-	}
-
-	if av, ok := a.(StringValue); ok {
-		if bv, ok := b.(StringValue); ok {
-			return cmpInt(strings.Compare(strings.ToLower(av.V), strings.ToLower(bv.V)), 0)
+// peelIfaces strips interface layers from a and b in lockstep while both sides
+// are wrapped, reporting whether every TypeName matched. It stops as soon as
+// either side is no longer an [InterfaceValue], leaving mixed shapes for the
+// caller to unwrap and compare by concrete value.
+func peelIfaces(a, b Value) (Value, Value, bool) {
+	for {
+		ai, aok := a.(InterfaceValue)
+		bi, bok := b.(InterfaceValue)
+		if !aok || !bok {
+			return a, b, true
 		}
+		if ai.TypeName != bi.TypeName {
+			return a, b, false
+		}
+		if ai.Value == nil || bi.Value == nil {
+			return a, b, ai.Value == bi.Value
+		}
+		a, b = ai.Value, bi.Value
 	}
-	return CompareValues(a, b)
+}
+
+// orderIfaces is peelIfaces for ordering: on the first TypeName
+// mismatch it reports the lexicographic order of the two names.
+func orderIfaces(a, b Value) (Value, Value, bool, int) {
+	for {
+		ai, aok := a.(InterfaceValue)
+		bi, bok := b.(InterfaceValue)
+		if !aok || !bok {
+			return a, b, true, 0
+		}
+		if ai.TypeName != bi.TypeName {
+			return a, b, false, cmpInt(strings.Compare(ai.TypeName, bi.TypeName), 0)
+		}
+		if ai.Value == nil || bi.Value == nil {
+			return a, b, ai.Value == bi.Value, cmpInt(boolInt(ai.Value != nil), boolInt(bi.Value != nil))
+		}
+		a, b = ai.Value, bi.Value
+	}
+}
+
+// unwrapIface strips every layer of [InterfaceValue] from v.
+//
+// Interfaces nest: an interface value whose concrete type is itself an
+// interface decodes to InterfaceValue{Value: InterfaceValue{...}}, and gob
+// streams do produce those. Peeling only the outer layer leaves an
+// InterfaceValue that the comparison switches do not handle, which made a
+// value compare unequal to itself.
+func unwrapIface(v Value) Value {
+	for {
+		iv, ok := v.(InterfaceValue)
+		if !ok {
+			return v
+		}
+		if iv.Value == nil {
+			// A nil inner value is a nil interface, which the decoder spells
+			// as NilValue. Normalising here keeps the postcondition total:
+			// unwrapIface never returns an InterfaceValue, so the comparison
+			// switches always reach a case. Returning the wrapper instead let
+			// it fall through to "not equal", even against itself.
+			return NilValue{}
+		}
+		v = iv.Value
+	}
 }
 
 func kindOrder(v Value) int {
