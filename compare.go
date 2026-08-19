@@ -62,7 +62,7 @@ func (c Comparer) Equal(a, b Value) bool {
 			return false
 		}
 	}
-	a, b = unwrapIface(a), unwrapIface(b)
+	a, b = Unwrap(a), Unwrap(b)
 	switch av := a.(type) {
 	case NilValue:
 		_, ok := b.(NilValue)
@@ -196,7 +196,7 @@ func (c Comparer) Compare(a, b Value) int {
 			return ord
 		}
 	}
-	a, b = unwrapIface(a), unwrapIface(b)
+	a, b = Unwrap(a), Unwrap(b)
 
 	if c.Fold {
 		if av, ok := a.(StringValue); ok {
@@ -318,31 +318,6 @@ func orderIfaces(a, b Value) (Value, Value, bool, int) {
 			return a, b, ai.Value == bi.Value, cmpInt(boolInt(ai.Value != nil), boolInt(bi.Value != nil))
 		}
 		a, b = ai.Value, bi.Value
-	}
-}
-
-// unwrapIface strips every layer of [InterfaceValue] from v.
-//
-// Interfaces nest: an interface value whose concrete type is itself an
-// interface decodes to InterfaceValue{Value: InterfaceValue{...}}, and gob
-// streams do produce those. Peeling only the outer layer leaves an
-// InterfaceValue that the comparison switches do not handle, which made a
-// value compare unequal to itself.
-func unwrapIface(v Value) Value {
-	for {
-		iv, ok := v.(InterfaceValue)
-		if !ok {
-			return v
-		}
-		if iv.Value == nil {
-			// A nil inner value is a nil interface, which the decoder spells
-			// as NilValue. Normalising here keeps the postcondition total:
-			// unwrapIface never returns an InterfaceValue, so the comparison
-			// switches always reach a case. Returning the wrapper instead let
-			// it fall through to "not equal", even against itself.
-			return NilValue{}
-		}
-		v = iv.Value
 	}
 }
 

@@ -4,7 +4,9 @@
 *.dll
 *.so
 *.dylib
+# A stray root-built gq binary is ignored, but the gq/ package directory is not.
 /gq
+!/gq/
 /cmd/gq/gq
 
 # Ignore everything in dist/

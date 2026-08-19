@@ -489,16 +489,6 @@ func TestRun_SumDegradesToFloat(t *testing.T) {
 	assert.Equal(t, "3.5\n", stdout.String())
 }
 
-// TestFormatFloat_Int64Boundary pins the int64 fast path's bounds: exactly
-// 2^63 must print in float form, not as a saturated int64.
-func TestFormatFloat_Int64Boundary(t *testing.T) {
-	assert.Equal(t, "9.223372036854776e+18", formatFloat(9223372036854775808.0))
-	assert.Equal(t, "-9223372036854775808", formatFloat(-9223372036854775808.0))
-	assert.Equal(t, "10", formatFloat(10.0))
-	assert.Equal(t, "3.5", formatFloat(3.5))
-	assert.Equal(t, "1e+19", formatFloat(1e19))
-}
-
 // TestRun_SumFloatAtInt64Boundary verifies a float sum landing exactly on 2^63
 // prints in float form end-to-end.
 func TestRun_SumFloatAtInt64Boundary(t *testing.T) {

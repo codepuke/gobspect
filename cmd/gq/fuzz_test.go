@@ -1,4 +1,7 @@
 // Fuzzing baseline: 2026-08-17. Ran 3h, no failures, 1231 corpus entries.
+// Extended with -read-limit flags for the v0.3.1 engine extraction;
+// 2026-08-18 20m re-sweep against the rewired pipeline, no failures,
+// 1858 corpus entries.
 package main
 
 import (
@@ -68,6 +71,9 @@ var safeFlags = [][]string{
 	{"-nonfinite", "strings"},
 	{"-nonfinite", "null"},
 	{"-nonfinite", "maybe"},
+	{"-read-limit", "0"},
+	{"-read-limit", "64"},
+	{"-read-limit", "-1"},
 	{"-h"},
 }
 
@@ -104,13 +110,14 @@ func buildArgs(seed []byte) []string {
 }
 
 // FuzzGQ drives the CLI end to end: argument parsing, flag-conflict
-// validation, gzip sniffing on stdin, and every output path from pretty
-// printing through csv, aggregates, and diffing.
+// validation, compression sniffing on stdin (via gobspect/decompress, which
+// has its own dedicated fuzzer), and every output path from pretty printing
+// through csv, aggregates, and diffing.
 //
-// This is the only target that covers maybeGzip, and the only one that
-// exercises the flag combinations as a whole rather than each library call in
-// isolation. A non-zero exit is a perfectly good outcome — the property is that
-// no argument vector and no stdin content can make the command panic.
+// This is the only target that exercises the flag combinations as a whole
+// rather than each library call in isolation. A non-zero exit is a perfectly
+// good outcome — the property is that no argument vector and no stdin content
+// can make the command panic.
 func FuzzGQ(f *testing.F) {
 	paths, _ := filepath.Glob(filepath.Join("..", "..", "testdata", "*.gob"))
 	if len(paths) == 0 {
@@ -133,7 +140,7 @@ func FuzzGQ(f *testing.F) {
 		args := buildArgs(argSeed)
 
 		in := stdin
-		// Half the inputs are gzip-wrapped so maybeGzip sees both a valid
+		// Half the inputs are gzip-wrapped so the sniffer sees both a valid
 		// stream and, via the fuzzer's mutations of raw input, malformed ones.
 		if len(argSeed) > 0 && argSeed[0]%2 == 0 {
 			in = gzipped(stdin)

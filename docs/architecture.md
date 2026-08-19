@@ -21,8 +21,20 @@ gobspect/
 ├── builtins.go        # Decoders for std lib opaque types (time.Time, big.Int, etc.)
 ├── format.go          # Human-readable rendering of Value trees
 ├── doc.go             # Package documentation
-└── (various)_test.go  # Tests
+├── (various)_test.go  # Tests
+├── query/             # Path-based navigation of Value trees
+├── sortval/           # Sorting Value sequences by struct field keys
+├── tabular/           # CSV/TSV rendering of Value nodes
+├── diff/              # Structural diff of Value trees and streams
+├── gq/                # The gq query engine: pipeline, rendering, aggregation
+├── decompress/        # Magic-byte-sniffing decompression (gzip, zstd, xz, bzip2, zip)
+└── cmd/gq/            # The gq command-line tool, built on gq/ and decompress/
 ```
+
+The `gq` and `decompress` subpackages exist so frontends beyond the CLI (e.g.
+MCP servers) share one implementation of the result pipeline, output
+rendering, aggregation, and compression sniffing instead of reimplementing
+`cmd/gq` — a duplication that historically produced behavior divergence.
 
 ## Two-Layer Model
 

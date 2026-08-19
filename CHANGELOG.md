@@ -4,6 +4,69 @@ All notable changes to gobspect are tracked here. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.3.1
+
+The logic that downstream frontends (notably the gobspect-mcp server) had been
+reimplementing from `cmd/gq` is now public API. Everything is additive: no
+existing signature changed or was removed.
+
+### Added
+
+- **`gq` subpackage** (`github.com/codepuke/gobspect/gq`) — the gq query
+  engine as a library:
+  - `Pipeline` drives a stream through the standard result flow (query →
+    index → sort → offset → limit) into a `Sink`, with turnkey drivers
+    `RunRender` (pretty/json/jsonl) and `RunTabular` (CSV/TSV). `RunTabular`
+    reads the printer's heterogeneous mode and sorts per struct-type
+    partition automatically in partition mode, so the partition-sort behavior
+    can no longer diverge between frontends. Sink errors come back wrapped in
+    `*SinkError` (transparent to `errors.Is`/`errors.As`), keeping output
+    failures distinguishable from decode failures.
+  - `Render` writes one `Value` in the gq output formats with the raw,
+    compact, and color switches.
+  - `Aggregate` reduces query matches (`count`, `sum`, `min`, `max`, `avg`)
+    with exact `int64` arithmetic degrading to `float64` only on overflow or
+    float input; non-numeric targets report `ErrNonNumeric`.
+- **`decompress` subpackage** (`github.com/codepuke/gobspect/decompress`) —
+  `decompress.Reader` transparently decompresses gzip, zstd, xz, bzip2, and
+  single-file zip archives, detected by magic-byte sniffing rather than file
+  extension; unrecognized input passes through unchanged. Brings zstd
+  (`klauspost/compress`) and xz (`ulikunitz/xz`) module dependencies, used
+  only by this subpackage (plus `dsnet/compress` as a test-only bzip2
+  writer).
+- **`Unwrap`** in the root package strips every `InterfaceValue` layer
+  (normalizing a nil inner value to `NilValue`) — the recursive unwrap the
+  comparison layer gained in v0.2.3, now exported for consumers.
+- **`tabular.Printer.HeterogeneousMode`** accessor, so pipeline drivers can
+  derive partition behavior from the printer itself.
+- **`gq -read-limit N`** flag wiring the long-exposed `WithReadLimit` option
+  into the CLI: caps decompressed bytes read from the input (default 0 = no
+  limit). With compressed input the cap applies post-decompression, so a
+  decompression bomb errors out early instead of exhausting memory.
+- **`gq` reads zstd, xz, bzip2, and zip input** (previously gzip only), on
+  stdin, `-f`, and `-diff` alike, via the shared `decompress` sniffing.
+
+### Fixed
+
+- **`gq -r` unwraps nested interface layers.** The raw-string check peeled a
+  single `InterfaceValue`, so a doubly-wrapped string printed as a quoted
+  pretty value instead of the bare string — the same defect class fixed in
+  `Equal`/`CompareValues` for v0.2.3. The extracted renderer (and the
+  aggregation layer's numeric coercion, which shared the single-level peel)
+  now unwrap recursively via `Unwrap`.
+
+### Test / infrastructure
+
+- Two new fuzz targets: `decompress.FuzzReader` (magic sniffing and all five
+  codecs over arbitrary bytes, with a passthrough byte-identity oracle) and
+  `gq.FuzzRender` (rendering and pipeline over hostile decoded values).
+  `FuzzGQ` gained `-read-limit` argument coverage.
+- The `cmd/gq` behavioral suite runs unmodified against the extracted engine
+  — the extraction is behavior-preserving by that proof. Two white-box tests
+  of moved helpers were ported: the `printValue` ANSI-color test now drives
+  `gq.Render`, and the `formatFloat` int64-boundary test moved to the gq
+  package.
+
 ## v0.2.3
 
 ### Fixed

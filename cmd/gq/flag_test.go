@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/codepuke/gobspect"
+	"github.com/codepuke/gobspect/gq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -206,9 +207,11 @@ func TestFlagValidation(t *testing.T) {
 	}
 }
 
-// TestPrintValue_ColorProducesANSI verifies that when color is enabled,
-// printValue produces output containing ANSI escape codes via
-// gobspect.WithColor(gobspect.ANSIColorScheme).
+// TestPrintValue_ColorProducesANSI verifies that when color is enabled, the
+// render path produces output containing ANSI escape codes via
+// gobspect.WithColor(gobspect.ANSIColorScheme). (The rendering itself lives
+// in the gq package since the v0.3.1 extraction; this pins the wiring the gq
+// command hands it.)
 func TestPrintValue_ColorProducesANSI(t *testing.T) {
 	type sample struct {
 		Name  string
@@ -238,8 +241,13 @@ func TestPrintValue_ColorProducesANSI(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := printValue(vals[0], &out, "pretty", false, false, true /* color */, fmtOpts, nil); err != nil {
-		t.Fatalf("printValue: %v", err)
+	err = gq.Render(&out, vals[0], gq.RenderOptions{
+		Format:        gq.FormatPretty,
+		Color:         true,
+		FormatOptions: fmtOpts,
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
 	}
 
 	got := out.String()

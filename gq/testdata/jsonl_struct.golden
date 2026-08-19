@@ -1,0 +1,1 @@
+{"fields":[{"name":"Name","value":{"kind":"string","v":"Alice"}},{"name":"Score","value":{"kind":"int","v":42}}],"kind":"struct","typeId":64,"typeName":"person"}

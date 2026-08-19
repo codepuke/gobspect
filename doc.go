@@ -97,4 +97,11 @@
 // path-based navigation of decoded Value trees. Use query.AllPathSeq for
 // lazy, streaming enumeration of matching values (early-break safe), or
 // query.AllPath to collect all matches into a slice.
+//
+// # Companion subpackages
+//
+// Beyond query, sibling subpackages cover sorting (sortval), CSV/TSV output
+// (tabular), structural diffing (diff), transparent decompression by
+// magic-byte sniffing (decompress), and the full query-run engine behind the
+// gq command — pipeline, rendering, aggregation — as a library (gq).
 package gobspect

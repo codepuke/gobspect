@@ -86,6 +86,27 @@ type InterfaceValue struct {
 	Value    Value  // the concrete value, or NilValue for nil
 }
 
+// Unwrap strips every layer of [InterfaceValue] from v and returns the
+// concrete value inside. Non-interface values are returned unchanged.
+//
+// Interfaces nest: an interface value whose concrete type is itself an
+// interface decodes to InterfaceValue{Value: InterfaceValue{...}}, and gob
+// streams do produce those, so peeling a single layer is not enough. An
+// InterfaceValue holding a nil inner value is a nil interface and normalises
+// to [NilValue]. Unwrap therefore never returns an InterfaceValue.
+func Unwrap(v Value) Value {
+	for {
+		iv, ok := v.(InterfaceValue)
+		if !ok {
+			return v
+		}
+		if iv.Value == nil {
+			return NilValue{}
+		}
+		v = iv.Value
+	}
+}
+
 // OpaqueValue holds the raw bytes for a GobEncoder, BinaryMarshaler, or
 // TextMarshaler value, along with any best-effort decoded form.
 type OpaqueValue struct {

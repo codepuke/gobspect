@@ -530,3 +530,13 @@ func TestProjectionBypassesHeteroCheck(t *testing.T) {
 		})
 	}
 }
+
+func TestPrinterHeterogeneousModeAccessor(t *testing.T) {
+	var out bytes.Buffer
+
+	p := tabular.NewPrinter(&out)
+	assert.Equal(t, tabular.HeterogeneousFirstWins, p.HeterogeneousMode(), "default mode")
+
+	p = tabular.NewPrinter(&out, tabular.WithHeterogeneousMode(tabular.HeterogeneousPartition))
+	assert.Equal(t, tabular.HeterogeneousPartition, p.HeterogeneousMode())
+}

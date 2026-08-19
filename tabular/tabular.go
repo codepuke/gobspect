@@ -144,6 +144,12 @@ func NewPrinter(out io.Writer, opts ...Option) *Printer {
 	return p
 }
 
+// HeterogeneousMode reports the printer's configured heterogeneous-type
+// handling mode.
+func (p *Printer) HeterogeneousMode() HeterogeneousMode {
+	return p.heteroMode
+}
+
 // cellString converts a single Value to a flat string for a CSV cell,
 // respecting the printer's configured bytes format and truncation limit.
 // Interface wrappers are unwrapped here so that a []byte behind an `any`

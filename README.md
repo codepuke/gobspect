@@ -170,7 +170,16 @@ The `gobspect/diff` subpackage compares two `Value` trees or two streams positio
 
 ### Compressed streams
 
-`Inspector.Stream` accepts any `io.Reader`, so compressed streams work by wrapping the reader before passing it in. For gzip, use `compress/gzip.NewReader`; apply the same pattern for any other compression format.
+The [`decompress`](decompress) subpackage (`github.com/codepuke/gobspect/decompress`) recognizes gzip, zstd, xz, bzip2, and single-file zip archives by sniffing magic bytes — no filename needed — and passes anything else through unchanged:
+
+```go
+r, err := decompress.Reader(file) // file may be compressed or plain
+if err != nil { ... }
+defer r.Close() // releases decompressor state; does not close file
+vals, err := gobspect.New().Stream(r).Collect()
+```
+
+Pair it with `gobspect.WithReadLimit` when the input is untrusted: the limit caps decompressed bytes, so a decompression bomb errors out instead of exhausting memory. For a format the package does not know, wrap the reader with your own decompressor first — `Inspector.Stream` accepts any `io.Reader`.
 
 ### Register a custom opaque decoder
 
@@ -412,6 +421,22 @@ tp.Flush()
 The printer derives a header row from the first struct's field definitions, aligns sparse gob rows to the canonical column order, and supports four strategies for mixed-type streams: `FirstWins`, `Reject`, `Union`, and `Partition`.
 
 See [tabular/README.md](tabular/README.md) for all options and heterogeneous-mode details.
+
+## The gq engine
+
+The [`gq`](gq) subpackage (`github.com/codepuke/gobspect/gq`) is the query engine behind the `gq` command, exported so other frontends (MCP servers, custom tools) get identical behavior without reimplementing it. It composes the pieces above into the standard result flow — query → index → sort → offset → limit → output:
+
+```go
+pipeline := gq.Pipeline{
+    Path:  path,        // query.Path; zero value matches everything
+    Index: gq.IndexAll, // or the Nth top-level value
+    Sort:  spec,        // sortval.SortSpec; zero value keeps stream order
+    Offset: 10, Limit: 25,
+}
+matched, err := pipeline.RunRender(stream, os.Stdout, gq.RenderOptions{Format: gq.FormatJSONL})
+```
+
+`Pipeline.Run` delivers results to any `Sink` func; `RunRender` writes them in gq's `pretty`/`json`/`jsonl` formats; `RunTabular` feeds a `tabular.Printer`, sorting per struct-type partition automatically when the printer is in partition mode. `gq.Aggregate` reduces matches numerically (`count`, `sum`, `min`, `max`, `avg`) with exact `int64` arithmetic that degrades to `float64` only when required.
 
 ## Documentation
 

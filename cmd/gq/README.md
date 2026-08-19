@@ -84,6 +84,7 @@ Query expressions use dot-separated field names in the spirit of jq. A leading `
 | `-max PATH` | `""` | Maximum of a numeric path over the matches |
 | `-avg PATH` | `""` | Average of a numeric path over the matches |
 | `-nonfinite` | `strings` | JSON rendering of non-finite floats (NaN, ±Inf): `strings` (`"NaN"`, `"+Inf"`, `"-Inf"`) or `null`; `json`/`jsonl` only |
+| `-read-limit N` | 0 | Maximum decompressed bytes to read from the input; 0 = no limit. Errors out instead of decoding past the cap — set it when inspecting untrusted files (a small compressed input can expand enormously) |
 
 Color is enabled automatically when stdout is a terminal and disabled when piping or redirecting.
 
@@ -95,9 +96,10 @@ overflows. Flags that would be ignored by the selected mode — for example
 with a usage error (exit 2) rather than silently dropped. `-h`/`-help` prints
 usage to stdout and exits 0.
 
-Gzip input is detected by content, not filename: a gzipped file passed to
-`-f`/`-diff` is decompressed regardless of its extension, matching the stdin
-behavior.
+Compressed input — gzip, zstd, xz, bzip2, or a single-file zip archive — is
+detected by content, not filename: a compressed file passed to `-f`/`-diff` is
+decompressed regardless of its extension, matching the stdin behavior. One
+compression layer is removed; `-read-limit` bounds the decompressed bytes read.
 
 ## Query syntax
 

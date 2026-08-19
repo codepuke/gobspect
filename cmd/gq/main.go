@@ -19,28 +19,27 @@
 //
 //	gq -f data.gob
 //	gq -f data.gob .Header.Timestamp
-//	gq -f data.gob.gz           # .gz files (and gzipped stdin) are decompressed automatically
+//	gq -f data.gob.gz           # compressed input (gzip, zstd, xz, bzip2, zip) is
+//	                            # detected by content and decompressed automatically
 //	cat data.gob | gq .Items.*
 //	gq -schema -f data.gob
 //	gq -format json -f data.gob .Name
 package main
 
 import (
-	"bufio"
-	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"math"
 	"os"
-	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/codepuke/gobspect"
+	"github.com/codepuke/gobspect/decompress"
 	"github.com/codepuke/gobspect/diff"
+	"github.com/codepuke/gobspect/gq"
 	"github.com/codepuke/gobspect/query"
 	"github.com/codepuke/gobspect/sortval"
 	"github.com/codepuke/gobspect/tabular"
@@ -98,6 +97,7 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 	maxFlag := fs.String("max", "", "path to a numeric field to take the maximum over and exit")
 	avgFlag := fs.String("avg", "", "path to a numeric field to average over the matches and exit")
 	nonfiniteFlag := fs.String("nonfinite", "strings", "JSON rendering of NaN/±Inf floats: strings or null")
+	readLimitFlag := fs.Int64("read-limit", 0, "max decompressed bytes to read from the input (0 = no limit)")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -157,6 +157,10 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		fmt.Fprintln(stderr, "gq: -index must be non-negative (or -1 for all)")
 		return 2
 	}
+	if *readLimitFlag < 0 {
+		fmt.Fprintln(stderr, "gq: -read-limit must be non-negative")
+		return 2
+	}
 	if *nonfiniteFlag != "strings" && *nonfiniteFlag != "null" {
 		fmt.Fprintf(stderr, "gq: unknown -nonfinite value %q; use strings or null\n", *nonfiniteFlag)
 		return 2
@@ -175,9 +179,9 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 
 	var r io.Reader
 	if inputPath == "" {
-		r, err = maybeGzip(stdin)
+		r, err = decompress.Reader(stdin)
 		if err != nil {
-			fmt.Fprintf(stderr, "gq: opening gzip stream: %v\n", err)
+			fmt.Fprintf(stderr, "gq: %v\n", err)
 			return 1
 		}
 	} else {
@@ -187,9 +191,9 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 			return 1
 		}
 		defer f.Close()
-		r, err = maybeGzip(f)
+		r, err = decompress.Reader(f)
 		if err != nil {
-			fmt.Fprintf(stderr, "gq: opening gzip stream: %v\n", err)
+			fmt.Fprintf(stderr, "gq: %v\n", err)
 			return 1
 		}
 	}
@@ -200,6 +204,9 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 	}
 	if *skipErrorsFlag {
 		inspOpts = append(inspOpts, gobspect.WithSkipCorruptValues(true))
+	}
+	if *readLimitFlag > 0 {
+		inspOpts = append(inspOpts, gobspect.WithReadLimit(*readLimitFlag))
 	}
 	ins := gobspect.New(inspOpts...)
 
@@ -232,9 +239,9 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 			return 1
 		}
 		defer other.Close()
-		otherReader, err := maybeGzip(other)
+		otherReader, err := decompress.Reader(other)
 		if err != nil {
-			fmt.Fprintf(stderr, "gq: opening diff target gzip stream: %v\n", err)
+			fmt.Fprintf(stderr, "gq: opening diff target: %v\n", err)
 			return 1
 		}
 		leftVals, err := ins.Stream(r).Collect()
@@ -420,114 +427,39 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 		}
 	}
 
-	idx := 0
-	anyMatch := false
+	renderFormat, _ := gq.ParseFormat(*formatFlag) // csv/tsv route through tp instead
+	renderOpts := gq.RenderOptions{
+		Format:        renderFormat,
+		Raw:           *rawFlag,
+		Compact:       *compactFlag,
+		Color:         useColor,
+		FormatOptions: fmtOpts,
+		JSONOptions:   jsonOpts,
+	}
+
+	pipeline := gq.Pipeline{
+		Path:   path,
+		Index:  *indexFlag,
+		Offset: *offsetFlag,
+		Limit:  *limitFlag,
+		Sort:   sortSpec,
+	}
+
 	exitCode := 0
-	resultN := 0
-
-	if len(sortSpec.Keys) > 0 {
-		var allResults []gobspect.Value
-		for v, err := range stream.Values() {
-			if err != nil {
-				fmt.Fprintf(stderr, "gq: %v\n", err)
-				return 1
-			}
-
-			if *indexFlag >= 0 && idx != *indexFlag {
-				idx++
-				continue
-			}
-
-			for result := range query.AllPathSeq(v, path) {
-				anyMatch = true
-				allResults = append(allResults, result)
-			}
-
-			idx++
-
-			if *indexFlag >= 0 && idx > *indexFlag {
-				break
-			}
-		}
-
-		var sorted []gobspect.Value
-		if tp != nil && heteroMode == tabular.HeterogeneousPartition {
-			// Per-partition sort: bucket results by struct type in arrival
-			// order, sort within each bucket, then concat.
-			sorted = sortPerPartition(allResults, sortSpec)
-		} else {
-			sorted = sortval.SortMatches(sortval.SeqOf(allResults), sortSpec)
-		}
-
-		for pos, result := range sorted {
-			if pos < *offsetFlag {
-				continue
-			}
-			var writeErr error
-			if tp != nil {
-				writeErr = tp.WriteValue(result)
-			} else {
-				writeErr = printValue(result, stdout, *formatFlag, *rawFlag, *compactFlag, useColor, fmtOpts, jsonOpts)
-			}
-			if writeErr != nil {
-				if errors.Is(writeErr, syscall.EPIPE) {
-					return 0
-				}
-				fmt.Fprintf(stderr, "gq: %v\n", writeErr)
-				return 1
-			}
-			resultN++
-			if *limitFlag > 0 && resultN >= *limitFlag {
-				break
-			}
-		}
+	var anyMatch bool
+	if tp != nil {
+		anyMatch, err = pipeline.RunTabular(stream, tp)
 	} else {
-	outer:
-		for v, err := range stream.Values() {
-			if err != nil {
-				fmt.Fprintf(stderr, "gq: %v\n", err)
-				return 1
-			}
-
-			if *indexFlag >= 0 && idx != *indexFlag {
-				idx++
-				continue
-			}
-
-			for result := range query.AllPathSeq(v, path) {
-				anyMatch = true
-
-				pos := resultN
-				resultN++
-				if pos < *offsetFlag {
-					continue
-				}
-
-				var writeErr error
-				if tp != nil {
-					writeErr = tp.WriteValue(result)
-				} else {
-					writeErr = printValue(result, stdout, *formatFlag, *rawFlag, *compactFlag, useColor, fmtOpts, jsonOpts)
-				}
-				if writeErr != nil {
-					if errors.Is(writeErr, syscall.EPIPE) {
-						return 0
-					}
-					fmt.Fprintf(stderr, "gq: %v\n", writeErr)
-					return 1
-				}
-
-				if *limitFlag > 0 && resultN-*offsetFlag >= *limitFlag {
-					break outer
-				}
-			}
-
-			idx++
-
-			if *indexFlag >= 0 && idx > *indexFlag {
-				break
-			}
+		anyMatch, err = pipeline.RunRender(stream, stdout, renderOpts)
+	}
+	if err != nil {
+		var sinkErr *gq.SinkError
+		if errors.As(err, &sinkErr) && errors.Is(err, syscall.EPIPE) {
+			// Downstream closed the pipe; normal termination.
+			return 0
 		}
+		fmt.Fprintf(stderr, "gq: %v\n", err)
+		return 1
 	}
 
 	if queryExpr != "" && !anyMatch {
@@ -542,76 +474,9 @@ func run(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) int
 	return exitCode
 }
 
-// printValue renders and writes a single value to w.
-func printValue(v gobspect.Value, w io.Writer, format string, raw, compact, color bool, fmtOpts []gobspect.FormatOption, jsonOpts []gobspect.JSONOption) error {
-	switch format {
-	case "json":
-		var out []byte
-		var err error
-		if compact {
-			out, err = gobspect.ToJSON(v, jsonOpts...)
-		} else {
-			out, err = gobspect.ToJSONIndent(v, "", "  ", jsonOpts...)
-		}
-		if err != nil {
-			return fmt.Errorf("encoding JSON: %w", err)
-		}
-		if _, err := w.Write(out); err != nil {
-			return err
-		}
-		_, err = fmt.Fprintln(w)
-		return err
-
-	case "jsonl":
-		// One compact JSON object per line, always — no multi-line indentation.
-		out, err := gobspect.ToJSON(v, jsonOpts...)
-		if err != nil {
-			return fmt.Errorf("encoding JSONL: %w", err)
-		}
-		if _, err := w.Write(out); err != nil {
-			return err
-		}
-		_, err = fmt.Fprintln(w)
-		return err
-
-	default: // "pretty"
-		opts := fmtOpts
-		if color {
-			opts = append(opts, gobspect.WithColor(gobspect.ANSIColorScheme))
-		}
-		if raw {
-			target := v
-			if iv, ok := target.(gobspect.InterfaceValue); ok {
-				target = iv.Value
-			}
-			if sv, ok := target.(gobspect.StringValue); ok {
-				_, err := fmt.Fprintln(w, sv.V)
-				return err
-			}
-		}
-		if err := gobspect.FormatTo(w, v, opts...); err != nil {
-			return err
-		}
-		_, err := fmt.Fprintln(w)
-		return err
-	}
-}
-
 // isTerminal reports whether f is connected to a terminal.
 func isTerminal(f *os.File) bool {
 	return term.IsTerminal(int(f.Fd()))
-}
-
-// maybeGzip sniffs the gzip magic bytes and transparently decompresses when
-// present. Detection is content-based for files and stdin alike — a gzipped
-// file works regardless of its extension. The gzip layer needs no explicit
-// Close: it wraps a reader whose lifetime the caller already manages.
-func maybeGzip(r io.Reader) (io.Reader, error) {
-	br := bufio.NewReader(r)
-	if head, _ := br.Peek(2); len(head) == 2 && head[0] == 0x1f && head[1] == 0x8b {
-		return gzip.NewReader(br)
-	}
-	return br, nil
 }
 
 // emit writes out followed by a newline to w.
@@ -634,12 +499,19 @@ func reportWrite(err error, stderr io.Writer) int {
 }
 
 // runAggregate drains the stream, applies path to each top-level value,
-// collects matches, reduces them according to mode, and prints a single
-// result to stdout. mode is one of "count", "sum", "min", "max", "avg". For
-// numeric modes, aggPath is parsed as an extra path expression to apply to
-// each match before numeric extraction (empty = use the match itself).
-// Exit codes: 0 on success, 1 on decode error, 2 on bad numeric input.
+// reduces the matches according to mode via [gq.Aggregate], and prints a
+// single result to stdout. mode is one of "count", "sum", "min", "max",
+// "avg". For numeric modes, aggPath is parsed as an extra path expression to
+// apply to each match before numeric extraction (empty = use the match
+// itself). Exit codes: 0 on success, 1 on decode error, 2 on bad numeric
+// input.
 func runAggregate(mode string, aggPath string, stream *gobspect.Stream, matchPath query.Path, stdout, stderr io.Writer) int {
+	op, ok := gq.ParseAggregateOp(mode)
+	if !ok {
+		fmt.Fprintf(stderr, "gq: unknown aggregation mode %q\n", mode)
+		return 2
+	}
+
 	var numericPath query.Path
 	if aggPath != "" {
 		var err error
@@ -650,223 +522,16 @@ func runAggregate(mode string, aggPath string, stream *gobspect.Stream, matchPat
 		}
 	}
 
-	var acc numAcc
-	var matchCount int64
-
-	pushNumeric := func(v gobspect.Value) error {
-		i, f, isInt, ok := toNumeric(v)
-		if !ok {
-			return fmt.Errorf("non-numeric value for aggregation: %s", gobspect.ValueKind(v))
+	res, err := gq.Aggregate(stream, matchPath, op, numericPath)
+	if err != nil {
+		if errors.Is(err, gq.ErrNonNumeric) {
+			fmt.Fprintf(stderr, "gq: -%s %q: %v\n", mode, aggPath, err)
+			return 2
 		}
-		acc.push(i, f, isInt)
-		return nil
+		fmt.Fprintf(stderr, "gq: %v\n", err)
+		return 1
 	}
-
-	for v, err := range stream.Values() {
-		if err != nil {
-			fmt.Fprintf(stderr, "gq: %v\n", err)
-			return 1
-		}
-		for result := range query.AllPathSeq(v, matchPath) {
-			matchCount++
-			if mode == "count" {
-				continue
-			}
-			target := result
-			if aggPath != "" {
-				// Apply the numeric path to the result; take only the first
-				// resolution so arithmetic stays well-defined.
-				r, ok := query.GetPath(result, numericPath)
-				if !ok {
-					continue
-				}
-				target = r
-			}
-			if err := pushNumeric(target); err != nil {
-				fmt.Fprintf(stderr, "gq: -%s %q: %v\n", mode, aggPath, err)
-				return 2
-			}
-		}
-	}
-
-	switch mode {
-	case "count":
-		fmt.Fprintln(stdout, matchCount)
-	case "sum":
-		fmt.Fprintln(stdout, acc.sumString())
-	case "min":
-		if !acc.sawAny {
-			fmt.Fprintln(stdout, "null")
-			return 0
-		}
-		fmt.Fprintln(stdout, acc.minString())
-	case "max":
-		if !acc.sawAny {
-			fmt.Fprintln(stdout, "null")
-			return 0
-		}
-		fmt.Fprintln(stdout, acc.maxString())
-	case "avg":
-		if acc.count == 0 {
-			fmt.Fprintln(stdout, "null")
-			return 0
-		}
-		fmt.Fprintln(stdout, formatFloat(acc.sumFloat/float64(acc.count)))
-	}
-	return 0
-}
-
-// numAcc accumulates numeric aggregation state. Integer inputs are tracked
-// exactly in int64 alongside the float64 mirror; sum and min/max degrade to
-// the float path only when a float value appears, an integer doesn't fit in
-// int64, or the running sum overflows — so e.g. summing IDs above 2^53 stays
-// exact instead of silently rounding.
-type numAcc struct {
-	count  int64
-	sawAny bool
-
-	intMode bool // all values so far were int64-exact and sumInt hasn't overflowed
-	sumInt  int64
-	minInt  int64
-	maxInt  int64
-
-	sumFloat float64
-	minFloat float64
-	maxFloat float64
-}
-
-// push records one value. For integer-exact inputs isInt is true and i holds
-// the value; f always holds the float64 mirror.
-func (a *numAcc) push(i int64, f float64, isInt bool) {
-	if !a.sawAny {
-		a.sawAny = true
-		a.intMode = isInt
-		a.sumInt, a.minInt, a.maxInt = i, i, i
-		a.sumFloat, a.minFloat, a.maxFloat = f, f, f
-		a.count = 1
-		return
-	}
-	a.count++
-	a.sumFloat += f
-	a.minFloat = min(a.minFloat, f)
-	a.maxFloat = max(a.maxFloat, f)
-	if a.intMode {
-		if !isInt {
-			a.intMode = false
-			return
-		}
-		if s, ok := addInt64(a.sumInt, i); ok {
-			a.sumInt = s
-		} else {
-			a.intMode = false
-			return
-		}
-		a.minInt = min(a.minInt, i)
-		a.maxInt = max(a.maxInt, i)
-	}
-}
-
-func (a *numAcc) sumString() string {
-	if a.intMode {
-		return strconv.FormatInt(a.sumInt, 10)
-	}
-	return formatFloat(a.sumFloat)
-}
-
-func (a *numAcc) minString() string {
-	if a.intMode {
-		return strconv.FormatInt(a.minInt, 10)
-	}
-	return formatFloat(a.minFloat)
-}
-
-func (a *numAcc) maxString() string {
-	if a.intMode {
-		return strconv.FormatInt(a.maxInt, 10)
-	}
-	return formatFloat(a.maxFloat)
-}
-
-// addInt64 adds two int64s, reporting false on overflow.
-func addInt64(a, b int64) (int64, bool) {
-	s := a + b
-	if (a > 0 && b > 0 && s < 0) || (a < 0 && b < 0 && s >= 0) {
-		return 0, false
-	}
-	return s, true
-}
-
-// toNumeric extracts a numeric value from v. isInt reports that i holds the
-// exact value; f always holds the float64 form. Returns ok=false for
-// non-numeric kinds (including strings and opaques).
-func toNumeric(v gobspect.Value) (i int64, f float64, isInt, ok bool) {
-	if iv, isIface := v.(gobspect.InterfaceValue); isIface {
-		v = iv.Value
-	}
-	switch n := v.(type) {
-	case gobspect.IntValue:
-		return n.V, float64(n.V), true, true
-	case gobspect.UintValue:
-		if n.V <= math.MaxInt64 {
-			return int64(n.V), float64(n.V), true, true
-		}
-		return 0, float64(n.V), false, true
-	case gobspect.FloatValue:
-		return 0, n.V, false, true
-	}
-	return 0, 0, false, false
-}
-
-// formatFloat renders a numeric accumulator compactly. Integer-valued floats
-// drop the trailing ".0" so e.g. a count-like sum of 10 reads as "10" instead
-// of "10.000000". The bounds check keeps the int64 conversion in range: out of
-// range it is implementation-defined (arm64 saturates, making exactly 2^63
-// print as MaxInt64).
-func formatFloat(f float64) string {
-	if f >= math.MinInt64 && f < math.MaxInt64 && f == float64(int64(f)) {
-		return strconv.FormatInt(int64(f), 10)
-	}
-	return strconv.FormatFloat(f, 'g', -1, 64)
-}
-
-// sortPerPartition buckets results by struct type (GobTypeID) in their first-
-// arrival order, sorts within each bucket, and returns the concatenation.
-// Values with GobTypeID == 0 (scalars, projections) form a single leading bucket.
-// This matches the tabular partition printer's notion of a "partition".
-func sortPerPartition(results []gobspect.Value, spec sortval.SortSpec) []gobspect.Value {
-	type bucket struct {
-		id   int
-		vals []gobspect.Value
-	}
-	order := []int{}          // bucket IDs in first-arrival order
-	byID := map[int]*bucket{} // ID → bucket
-	for _, v := range results {
-		id := partitionID(v)
-		b, ok := byID[id]
-		if !ok {
-			b = &bucket{id: id}
-			byID[id] = b
-			order = append(order, id)
-		}
-		b.vals = append(b.vals, v)
-	}
-	out := make([]gobspect.Value, 0, len(results))
-	for _, id := range order {
-		sorted := sortval.SortMatches(sortval.SeqOf(byID[id].vals), spec)
-		out = append(out, sorted...)
-	}
-	return out
-}
-
-// partitionID returns the struct GobTypeID of v, unwrapping InterfaceValue.
-// Non-struct values and structs with no type ID return 0.
-func partitionID(v gobspect.Value) int {
-	if iv, ok := v.(gobspect.InterfaceValue); ok {
-		v = iv.Value
-	}
-	if sv, ok := v.(gobspect.StructValue); ok {
-		return sv.GobTypeID
-	}
+	fmt.Fprintln(stdout, res.String())
 	return 0
 }
 
@@ -878,7 +543,7 @@ var allFlagNames = []string{
 	"bytes", "max-bytes", "color", "no-color", "r", "compact", "null-on-miss",
 	"time-format", "no-headers", "hetero", "limit", "offset", "sort",
 	"sort-desc", "sort-fold", "sort-drop-missing", "skip-errors", "diff",
-	"count", "sum", "min", "max", "avg", "nonfinite",
+	"count", "sum", "min", "max", "avg", "nonfinite", "read-limit",
 }
 
 // aggFlagNames are the mutually exclusive aggregation flags; any one of them
@@ -900,7 +565,8 @@ var modeFlags = map[string]map[string]bool{
 // behavior, color control, and the mode selectors themselves.
 var universalFlags = map[string]bool{
 	"file": true, "color": true, "no-color": true, "skip-errors": true,
-	"diff": true, "schema": true, "types": true, "stats": true,
+	"read-limit": true,
+	"diff":       true, "schema": true, "types": true, "stats": true,
 	"count": true, "sum": true, "min": true, "max": true, "avg": true,
 }
 
