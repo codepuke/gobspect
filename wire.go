@@ -97,7 +97,7 @@ func decodeString(r io.ByteReader) (string, error) {
 //
 // Important: gob does NOT flatten embedded structs. CommonType is encoded
 // as a nested struct at field 1 of each containing type, not as inlined
-// fields. See docs/wire-format.md and the reference implementation.
+// fields. See docs/03-wire-format.md and the reference implementation.
 
 type wireCommonType struct {
 	Name string

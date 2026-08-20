@@ -128,6 +128,7 @@ func TestREADME_BigInt(t *testing.T) {
 
 // --- Example 6: Register a custom opaque decoder ----------------------------
 
+// snippet:start gobencoder-type
 type customToken struct{ payload []byte }
 
 func (c customToken) GobEncode() ([]byte, error) { return c.payload, nil }
@@ -135,6 +136,8 @@ func (c *customToken) GobDecode(b []byte) error {
 	c.payload = append([]byte(nil), b...)
 	return nil
 }
+
+// snippet:end
 
 // Wrap in a struct with an interface field so the type name is transmitted.
 type tokenHolder struct{ Token any }

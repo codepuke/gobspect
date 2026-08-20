@@ -12,7 +12,7 @@ import (
 )
 
 // The tests in this file feed deliberately hostile byte streams through the
-// public Stream API. The contract (docs/architecture.md, README) is that the
+// public Stream API. The contract (docs/04-architecture.md, README) is that the
 // decoder never panics and never makes an unbounded allocation on untrusted
 // input; each case here would violate that contract without the corresponding
 // guard.

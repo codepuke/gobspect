@@ -202,7 +202,7 @@ ins.RegisterDecoder("SessionToken", func(data []byte) (any, error) {
 
 The returned value is stored in `OpaqueValue.Decoded` and used by `Format`. Registered decoders override built-in decoders for the same type name.
 
-> **Note:** `CommonType.Name` is only populated in the wire format when a `GobEncoder` type is transmitted through an interface field. When such a type is encoded directly (not via an interface), gob sends an empty name and registry lookup by name cannot match. See [docs/opaque-types.md](docs/opaque-types.md) for details.
+> **Note:** `CommonType.Name` is only populated in the wire format when a `GobEncoder` type is transmitted through an interface field. When such a type is encoded directly (not via an interface), gob sends an empty name and registry lookup by name cannot match. See [docs/02-opaque-types.md](docs/02-opaque-types.md) for details.
 
 ### JSON output
 
@@ -240,7 +240,7 @@ The above produces output like:
 
 > **Note:** `typeId` is session-scoped. The numeric value depends on the order type definitions appear in the stream and will differ between sessions.
 
-Every node carries a `"kind"` discriminator. The full field mapping per kind is documented in [docs/api.md](docs/api.md).
+Every node carries a `"kind"` discriminator. The full field mapping per kind is documented in [docs/01-api.md](docs/01-api.md).
 
 ### Format options
 
@@ -337,7 +337,7 @@ case gobspect.OpaqueValue:
 }
 ```
 
-The full type definitions are documented in [docs/api.md](docs/api.md).
+The full type definitions are documented in [docs/01-api.md](docs/01-api.md).
 
 ## Decoding limits
 
@@ -440,11 +440,10 @@ matched, err := pipeline.RunRender(stream, os.Stdout, gq.RenderOptions{Format: g
 
 ## Documentation
 
-- [docs/api.md](docs/api.md) - Full API reference including all Value node types and formatting options
-- [docs/architecture.md](docs/architecture.md) - Design principles and two-layer model
-- [docs/wire-format.md](docs/wire-format.md) - Gob wire format reference for implementers
-- [docs/opaque-types.md](docs/opaque-types.md) - Opaque type decoding strategy and built-in decoder formats
-- [docs/testing.md](docs/testing.md) - Fixture generation and golden file testing strategy
+- [docs/01-api.md](docs/01-api.md) - Full API reference including all Value node types and formatting options
+- [docs/04-architecture.md](docs/04-architecture.md) - Design principles and two-layer model
+- [docs/03-wire-format.md](docs/03-wire-format.md) - Gob wire format reference for implementers
+- [docs/02-opaque-types.md](docs/02-opaque-types.md) - Opaque type decoding strategy and built-in decoder formats
 
 ## Contributing
 
