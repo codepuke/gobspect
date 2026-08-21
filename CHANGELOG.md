@@ -34,7 +34,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Still divergent, tracked but not fixed: fixture data on the shared multi-tab
   topics. gobspect uses `Dog`/`Pet` for `interface-values` and
   `2024-03-14T15:09:26Z` for `time-values`, where the sister ports use other
-  values; same-id variants are meant to show the same data.
+  values; same-id variants are meant to show the same data. (Fixed by the
+  harmonization entry below.)
+
+- **Harmonize snippet fixture data with the cross-port contract** in
+  `example_stdlib_test.go`, closing the divergence noted above. Every language
+  variant of a topic now performs the same operation on the same data:
+  `Point{X: 3, Y: 4}` is the running struct, `encode-slice` uses
+  `[]int{1, 2, 3}`, `encode-map` uses `{"one": 1, "two": 2}`, `nested-struct`
+  uses `Line{From: {1,2}, To: {3,4}}` (replacing `Photo`/`Size`),
+  `interface-values` uses `Box{Value: Point{3,4}}` registered as `main.Point`
+  via `gob.RegisterName` (replacing `Pet`/`Animal`/`Dog`, now deleted),
+  `stream-multiple-values` sends `{3,4}` then `{5,6}` through one encoder, and
+  `time-values` uses `2009-11-10T23:00:00Z`. Add three new topics from the
+  contract: `end-of-stream` (the `io.EOF` idiom), `encode-scalars` (anchor
+  value 42), and `zero-fields-omitted` (full vs partial `Point`, comparing
+  encoded sizes). Reference all stdlib topics from `docs/03-wire-format.md`.
+  Skipped by design: `define-schema` (Go's static types make it a
+  non-operation), `semantic-type` (named Go types need nothing special),
+  `custom-marshaler` (covered by the deliberately separate `gobencoder-type`
+  topic), and `uuid-values` (would add a uuid dependency to `go.mod`).
+
+  No library code, exported API, or wire behaviour changed.
 
 ## v0.3.1
 

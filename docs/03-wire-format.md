@@ -77,6 +77,10 @@ Each call to `Encoder.Encode` on the producing side emits the type definitions t
 
 :::examples stream-multiple-values
 
+There is no end-of-stream marker in the grammar — a stream simply stops when the underlying reader is exhausted, and a consumer decodes until it sees `io.EOF`:
+
+:::examples end-of-stream
+
 ## Value Encoding
 
 ```
@@ -90,11 +94,29 @@ StructValue     = (uint(fieldDelta) FieldValue)*
 
 **Struct fields are encoded sparsely.** The encoder tracks the index of the last field it sent, starting at −1 before any field. Each transmitted field is preceded by a uint delta — the gap from that previous index — so the first field of a struct (index 0) carries delta 1, and consecutive fields each carry delta 1. Zero-valued fields are omitted entirely, which shows up as a larger delta. A delta of 0 terminates the struct.
 
+The omission of zero-valued fields is observable from outside: a struct with a zero field encodes to fewer bytes than the same struct fully populated, and the decoder restores the missing field on the way back in:
+
+:::examples zero-fields-omitted
+
 **Non-struct top-level values** (ints, strings, slices, maps, …) are encoded as a singleton: a single `uint(0)` marker — the "delta" addressing field 0 of an implicit one-field struct — followed immediately by the value. There is no trailing terminator after a singleton value.
 
-**Slices, arrays, and maps** are encoded as a uint element count followed by the elements back to back (key then value, alternating, for maps). Elements carry no field deltas — just their raw value encodings.
+**Slices, arrays, and maps** are encoded as a uint element count followed by the elements back to back (key then value, alternating, for maps). Elements carry no field deltas — just their raw value encodings:
+
+:::examples encode-slice
+
+:::examples encode-map
+
+Structs, by contrast, need a type definition on the wire before their first value:
 
 :::examples encode-struct
+
+Decoding walks the same deltas in reverse, filling in each transmitted field:
+
+:::examples decode-struct
+
+A struct field can itself be a struct — the field value is a complete nested struct encoding, deltas, terminator and all:
+
+:::examples nested-struct
 
 ### An annotated example
 
@@ -111,7 +133,9 @@ Encoding the int `7` produces four bytes:
 | `00` | singleton marker `uint(0)` |
 | `0e` | the value 7 — zig-zag encoded as 2×7 = 14 |
 
-No type definition message is needed because `int` is a predefined type.
+No type definition message is needed because `int` is a predefined type. Every scalar kind follows the same shape — a predefined type ID, the singleton marker, and a compact payload:
+
+:::examples encode-scalars
 
 ## Type Definitions (wireType)
 
@@ -176,6 +200,10 @@ How gobspect interprets the blob depends on the variant:
 - **`TextMarshalerT`** blobs are UTF-8 text by contract. gobspect always decodes them as strings, with no registry lookup. Note that Go 1.26 removed `TextMarshaler` support from gob — streams written by older Go versions still contain `TextMarshalerT` types, but newer encoders write those types as plain structs.
 - **`GobEncoderT` and `BinaryMarshalerT`** blobs are handed to the opaque decoder registered for the type name, if any (built-ins cover `time.Time`, `big.Int`, and more — see the Opaque Types page). Undecoded blobs keep their raw bytes.
 - **Blobs with an empty type name** — which occur when a `GobEncoder` type is encoded directly rather than through an interface, since `CommonType.Name` is empty in that case — are tried against decoders registered with `RegisterUnnamedDecoder`, in registration order.
+
+The opaque type you will meet most often is `time.Time`, which implements `GobEncoder` and travels as an opaque blob while round-tripping like any other value:
+
+:::examples time-values
 
 ## Limits
 
