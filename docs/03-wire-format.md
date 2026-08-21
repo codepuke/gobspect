@@ -165,7 +165,7 @@ Two details make interface values more intricate than the grammar suggests:
 - **Inline type definitions are not length-delimited.** Unlike top-level type definition messages, the definitions inside `InlineTypeDefs` are a bare negated type ID followed directly by the `wireType` body — there is no `uint(length)` prefix.
 - **An interface value can span multiple stream messages.** In the common case the encoder ends the current message after the concrete type name, sends the concrete type's definitions as ordinary top-level type definition messages, and delivers the concrete type ID and value bytes in a *continuation message* — a subsequent outer message whose body continues the interrupted value. A single decoded value containing interfaces can therefore consume several wire messages.
 
-:::examples encode-interface
+:::examples interface-values
 
 ## Opaque Encoder Blobs
 

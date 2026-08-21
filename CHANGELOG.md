@@ -4,6 +4,38 @@ All notable changes to gobspect are tracked here. The format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- **Documentation snippet topic ids renamed** for cross-language consistency on
+  the codepuke site. A topic renders every language's variant in one tabbed
+  block, so the four ports (gobspect, gobts, pygob, gobdotnet) must agree on
+  each id. All four had independently picked their own; the ids were reconciled
+  on 2026-08-20 with ties broken toward gobts. Renamed in
+  `example_stdlib_test.go` (and the matching `:::examples` reference in
+  `docs/03-wire-format.md`):
+  - `encode-nested-struct` → `nested-struct`
+  - `encode-interface` → `interface-values`
+  - `encode-time` → `time-values`
+
+  gobspect's API-only topics (`query-*`, `to-json`, `diff-values`,
+  `redact-output`, `format-options`, `stream-values`, `stream-types`,
+  `schema-extract`, `register-decoder`, `gobencoder-type`) are unchanged — they
+  render as single-tab blocks and collide with nothing. `gobencoder-type` was
+  specifically reviewed against gobts's `custom-marshaler` and kept separate:
+  it shows a Go type implementing `GobEncoder`/`GobDecode`, not codec
+  registration.
+
+  No library code, exported API, or wire behaviour changed. Note that
+  `content/manifest.json` in codepuke pins gobspect at commit `129def3` with
+  the old ids, so it needs a re-sync.
+
+  Still divergent, tracked but not fixed: fixture data on the shared multi-tab
+  topics. gobspect uses `Dog`/`Pet` for `interface-values` and
+  `2024-03-14T15:09:26Z` for `time-values`, where the sister ports use other
+  values; same-id variants are meant to show the same data.
+
 ## v0.3.1
 
 The logic that downstream frontends (notably the gobspect-mcp server) had been

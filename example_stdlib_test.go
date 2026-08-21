@@ -60,8 +60,8 @@ func Example_decodeStruct() {
 	// Output: X = 3 Y = 4
 }
 
-func Example_encodeNestedStruct() {
-	// snippet:start encode-nested-struct
+func Example_nestedStruct() {
+	// snippet:start nested-struct
 	type Size struct{ W, H int }
 	type Photo struct {
 		Title string
@@ -124,8 +124,8 @@ func Example_encodeMap() {
 	// pears: 7
 }
 
-func Example_encodeInterface() {
-	// snippet:start encode-interface
+func Example_interfaceValues() {
+	// snippet:start interface-values
 	// Register the concrete type so its name travels on the wire.
 	gob.Register(Dog{})
 
@@ -172,8 +172,8 @@ func Example_streamMultipleValues() {
 	// 5 6
 }
 
-func Example_encodeTime() {
-	// snippet:start encode-time
+func Example_timeValues() {
+	// snippet:start time-values
 	launch := time.Date(2024, time.March, 14, 15, 9, 26, 0, time.UTC)
 
 	var buf bytes.Buffer
